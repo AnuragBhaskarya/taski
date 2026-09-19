@@ -5,7 +5,6 @@ const DOM = {
   taskList: document.getElementById('taskList'),
   fabContainer: document.getElementById('fabContainer'),
   fabAdd: document.getElementById('fabAdd'),
-  deleteZone: document.getElementById('deleteZone'),
   addModal: document.getElementById('addModal'),
   modalInput: document.getElementById('modalInput'),
   modalCancel: document.getElementById('modalCancel'),
@@ -506,6 +505,20 @@ function onPointerDown(e) {
   ph.className = 'drag-placeholder';
   ph.style.height = rect.height + 'px';
   ph.style.marginBottom = getComputedStyle(item).marginBottom;
+  
+  // Inner content for swipe-to-delete trash icon
+  const phContent = document.createElement('div');
+  phContent.className = 'drag-placeholder__content';
+  phContent.innerHTML = `
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="3 6 5 6 21 6"></polyline>
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+      <line x1="10" y1="11" x2="10" y2="17"></line>
+      <line x1="14" y1="11" x2="14" y2="17"></line>
+    </svg>
+  `;
+  ph.appendChild(phContent);
+
   item.parentNode.insertBefore(ph, item);
 
   // Lift item
@@ -526,12 +539,13 @@ function onPointerDown(e) {
     pointerId: e.pointerId,
     ox: e.clientX - rect.left,
     oy: e.clientY - rect.top,
+    isDeleting: false,
+    startY: e.clientY,
     clientY: e.clientY
   };
 
-  // Hide FAB and show Delete Zone
+  // Hide FAB during drag
   DOM.fabContainer.classList.add('fab-container--hidden');
-  DOM.deleteZone.classList.add('delete-zone--active');
 
   window.addEventListener('pointermove', onPointerMove);
   window.addEventListener('pointerup',   onPointerUp);
@@ -541,8 +555,6 @@ function onPointerDown(e) {
 }
 
 function updatePlaceholder(dragY) {
-  if (!drag || drag.isDeleting) return;
-  
   const children = Array.from(DOM.taskList.children);
   let newIdx = children.length;
 
@@ -600,32 +612,36 @@ function onPointerMove(e) {
   item.style.left = (e.clientX - ox) + 'px';
   item.style.top  = (e.clientY - oy) + 'px';
 
-  // Check delete zone (target the trash icon specifically to allow scrolling on the sides)
-  const trashRect = DOM.deleteZone.querySelector('.delete-zone__content').getBoundingClientRect();
-  const padding = 30; // Forgiving hit area
-  const inDeleteZone = 
-    e.clientX >= trashRect.left - padding && 
-    e.clientX <= trashRect.right + padding && 
-    e.clientY >= trashRect.top - padding && 
-    e.clientY <= trashRect.bottom + padding;
+  // Calculate left swipe for delete
+  const screenW = window.innerWidth;
+  const deleteThreshold = screenW * 0.15; // Delete triggers at 15% remaining
+  const startRed = screenW * 0.7; // Red gradient starts showing when dragged 30% (70% remaining)
+  
+  // Progress from 0 (at startRed) to 1 (much faster ramp up)
+  let progress = 0;
+  if (e.clientX < startRed) {
+    progress = Math.min(1, (1 - e.clientX / startRed) * 2);
+  }
+  const inDeleteZone = e.clientX <= deleteThreshold;
+  
+  // Control the hardware-accelerated CSS pseudo-element for perfectly consistent vivid red blending
+  drag.ph.style.setProperty('--red-progress', progress);
+
+  const phContent = drag.ph.querySelector('.drag-placeholder__content');
   
   if (inDeleteZone !== drag.isDeleting) {
-    const items = itemsInList();
-    const before = captureRects(items);
-    
     drag.isDeleting = inDeleteZone;
-    
     if (inDeleteZone) {
-      item.style.transform = 'scale(0)';
-      DOM.deleteZone.classList.add('delete-zone--hover');
-      ph.style.display = 'none'; // Hide placeholder to collapse list
+      phContent.style.opacity = '1';
+      phContent.style.transform = 'scale(1.2) rotate(0deg)'; // Scaled up slightly for more presence
+      item.style.transform = 'scale(0.85) rotate(-3deg)'; 
+      item.style.boxShadow = '0 5px 15px rgba(0,0,0,0.1)'; 
     } else {
-      item.style.transform = 'scale(1)';
-      DOM.deleteZone.classList.remove('delete-zone--hover');
-      ph.style.display = ''; // Restore placeholder
+      phContent.style.opacity = '0';
+      phContent.style.transform = 'scale(0) rotate(-45deg)';
+      item.style.transform = 'scale(1) rotate(0deg)';
+      item.style.boxShadow = '0 15px 30px rgba(0,0,0,0.15)'; 
     }
-    
-    flipAnimate(itemsInList(), before);
   }
 
   updatePlaceholder(drag.clientY);
@@ -643,18 +659,29 @@ function onPointerUp(e) {
   window.removeEventListener('pointerup',   onPointerUp);
   window.removeEventListener('pointercancel', onPointerUp);
 
-  // Restore FAB and hide Delete Zone
+  // Restore FAB
   DOM.fabContainer.classList.remove('fab-container--hidden');
-  DOM.deleteZone.classList.remove('delete-zone--active');
-  DOM.deleteZone.classList.remove('delete-zone--hover');
 
   if (drag.isDeleting) {
-    // Actual delete logic
-    item.remove();
-    ph.remove();
-    tasks = tasks.filter(t => t.id !== item.dataset.id);
-    saveTasks();
-    updateZebraStripes(DOM.taskList);
+    // Delete animation
+    item.style.transform = 'scale(0) rotate(-15deg)';
+    item.style.opacity = '0';
+    
+    // Collapse placeholder using spring
+    const startHeight = ph.offsetHeight;
+    animateSpring(ph, startHeight, 0, (y, el) => {
+      const p = y / startHeight;
+      el.style.height = `${y}px`;
+      el.style.marginBottom = `${p * 8}px`;
+      el.style.opacity = p;
+    }, (el) => {
+      el.remove();
+      item.remove();
+      tasks = tasks.filter(t => t.id !== item.dataset.id);
+      saveTasks();
+      updateZebraStripes(DOM.taskList);
+    });
+    
     drag = null;
     return;
   }
