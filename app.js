@@ -530,8 +530,9 @@ function onPointerDown(e) {
   item.style.margin = '0';
   item.style.zIndex = '9000';
   item.style.pointerEvents = 'none';
-  // Use a transition for smooth scaling when entering/leaving delete zone
-  item.style.transition = 'transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)';
+  // Use a transition for smooth box-shadow when entering/leaving delete zone.
+  // Transform is controlled continuously by JS via progress.
+  item.style.transition = 'box-shadow 0.25s ease';
   document.body.appendChild(item);
 
   drag = {
@@ -541,7 +542,10 @@ function onPointerDown(e) {
     oy: e.clientY - rect.top,
     isDeleting: false,
     startY: e.clientY,
-    clientY: e.clientY
+    clientY: e.clientY,
+    clientX: e.clientX,
+    initialLeft: rect.left,
+    itemWidth: rect.width
   };
 
   // Hide FAB during drag
@@ -555,6 +559,13 @@ function onPointerDown(e) {
 }
 
 function updatePlaceholder(dragY) {
+  if (!drag) return;
+
+  // Lock vertical sorting if the user is swiping left.
+  // If the placeholder DOM node moves while swiping, it resets the CSS keyframe animations!
+  const swipeLeftDistance = drag.initialLeft - drag.clientX;
+  if (swipeLeftDistance > drag.itemWidth * 0.05) return;
+
   const children = Array.from(DOM.taskList.children);
   let newIdx = children.length;
 
@@ -606,40 +617,55 @@ function autoScrollLoop() {
 
 function onPointerMove(e) {
   if (!drag) return;
-  const { item, ph, ox, oy } = drag;
+  const { item, ph, ox, oy, initialLeft, itemWidth } = drag;
   drag.clientY = e.clientY;
+  drag.clientX = e.clientX;
 
   item.style.left = (e.clientX - ox) + 'px';
   item.style.top  = (e.clientY - oy) + 'px';
 
-  // Calculate left swipe for delete
-  const screenW = window.innerWidth;
-  const deleteThreshold = screenW * 0.15; // Delete triggers at 15% remaining
-  const startRed = screenW * 0.7; // Red gradient starts showing when dragged 30% (70% remaining)
+  // Calculate left swipe distance relative to item's starting position
+  const currentItemLeft = e.clientX - ox;
+  const swipeLeftDistance = initialLeft - currentItemLeft;
+
+  // Hysteresis threshold latching to eliminate flickering during drag
+  const enterDeleteThreshold = itemWidth * 0.32; // Trigger ON at 32% left swipe
+  const exitDeleteThreshold  = itemWidth * 0.20; // Trigger OFF only when pulled back right past 20%
+  const startRed             = itemWidth * 0.08; // Red starts glowing at 8% left swipe
   
-  // Progress from 0 (at startRed) to 1 (much faster ramp up)
+  // Calculate progress for smooth red gradient blending
   let progress = 0;
-  if (e.clientX < startRed) {
-    progress = Math.min(1, (1 - e.clientX / startRed) * 2);
+  if (swipeLeftDistance > startRed) {
+    progress = Math.min(1, (swipeLeftDistance - startRed) / (enterDeleteThreshold - startRed));
   }
-  const inDeleteZone = e.clientX <= deleteThreshold;
-  
-  // Control the hardware-accelerated CSS pseudo-element for perfectly consistent vivid red blending
   drag.ph.style.setProperty('--red-progress', progress);
+
+  // Continuously scale down and rotate the item card as we swipe left
+  const currentScale = 1 - (0.15 * progress);
+  const currentRotate = -3 * progress;
+  item.style.transform = `scale(${currentScale}) rotate(${currentRotate}deg)`;
+
+  // Latch delete state with buffer zone
+  let inDeleteZone = drag.isDeleting;
+  if (!drag.isDeleting && swipeLeftDistance >= enterDeleteThreshold) {
+    inDeleteZone = true;
+  } else if (drag.isDeleting && swipeLeftDistance < exitDeleteThreshold) {
+    inDeleteZone = false;
+  }
 
   const phContent = drag.ph.querySelector('.drag-placeholder__content');
   
   if (inDeleteZone !== drag.isDeleting) {
     drag.isDeleting = inDeleteZone;
     if (inDeleteZone) {
-      phContent.style.opacity = '1';
-      phContent.style.transform = 'scale(1.2) rotate(0deg)'; // Scaled up slightly for more presence
-      item.style.transform = 'scale(0.85) rotate(-3deg)'; 
+      if (phContent) {
+        phContent.classList.add('delete-active');
+      }
       item.style.boxShadow = '0 5px 15px rgba(0,0,0,0.1)'; 
     } else {
-      phContent.style.opacity = '0';
-      phContent.style.transform = 'scale(0) rotate(-45deg)';
-      item.style.transform = 'scale(1) rotate(0deg)';
+      if (phContent) {
+        phContent.classList.remove('delete-active');
+      }
       item.style.boxShadow = '0 15px 30px rgba(0,0,0,0.15)'; 
     }
   }
