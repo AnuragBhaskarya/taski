@@ -3,7 +3,9 @@ const DOM = {
   themeIconMoon: document.getElementById('themeIconMoon'),
   themeIconSun: document.getElementById('themeIconSun'),
   taskList: document.getElementById('taskList'),
+  fabContainer: document.getElementById('fabContainer'),
   fabAdd: document.getElementById('fabAdd'),
+  deleteZone: document.getElementById('deleteZone'),
   addModal: document.getElementById('addModal'),
   modalInput: document.getElementById('modalInput'),
   modalCancel: document.getElementById('modalCancel'),
@@ -515,7 +517,8 @@ function onPointerDown(e) {
   item.style.margin = '0';
   item.style.zIndex = '9000';
   item.style.pointerEvents = 'none';
-  item.style.transition = 'none';
+  // Use a transition for smooth scaling when entering/leaving delete zone
+  item.style.transition = 'transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)';
   document.body.appendChild(item);
 
   drag = {
@@ -523,49 +526,109 @@ function onPointerDown(e) {
     pointerId: e.pointerId,
     ox: e.clientX - rect.left,
     oy: e.clientY - rect.top,
+    clientY: e.clientY
   };
+
+  // Hide FAB and show Delete Zone
+  DOM.fabContainer.classList.add('fab-container--hidden');
+  DOM.deleteZone.classList.add('delete-zone--active');
 
   window.addEventListener('pointermove', onPointerMove);
   window.addEventListener('pointerup',   onPointerUp);
   window.addEventListener('pointercancel', onPointerUp);
+
+  drag.scrollRAF = requestAnimationFrame(autoScrollLoop);
 }
 
-function onPointerMove(e) {
-  if (!drag) return;
-  const { item, ph, ox, oy } = drag;
-
-  item.style.left = (e.clientX - ox) + 'px';
-  item.style.top  = (e.clientY - oy) + 'px';
-
-  // Auto-scroll
-  if (e.clientY < 60) window.scrollBy(0, -10);
-  else if (e.clientY > innerHeight - 60) window.scrollBy(0, 10);
-
-  // Where should the placeholder be?
+function updatePlaceholder(dragY) {
+  if (!drag || drag.isDeleting) return;
+  
   const children = Array.from(DOM.taskList.children);
-  const dragY = e.clientY;
   let newIdx = children.length;
 
   for (let i = 0; i < children.length; i++) {
     const c = children[i];
-    if (c === ph) continue;
+    if (c === drag.ph) continue;
     const cr = c.getBoundingClientRect();
     const s = spring(c);
     const mid = (cr.top - (s.y||0)) + cr.height / 2;
     if (dragY < mid) { newIdx = i; break; }
   }
 
-  const phIdx = children.indexOf(ph);
-  if (newIdx === phIdx) return;
+  const phIdx = children.indexOf(drag.ph);
+  if (newIdx !== phIdx) {
+    const items = itemsInList();
+    const before = captureRects(items);
 
-  // FLIP
-  const items = itemsInList();
-  const before = captureRects(items);
+    if (newIdx >= children.length) DOM.taskList.appendChild(drag.ph);
+    else DOM.taskList.insertBefore(drag.ph, children[newIdx] === drag.ph ? children[newIdx+1] : children[newIdx]);
 
-  if (newIdx >= children.length) DOM.taskList.appendChild(ph);
-  else DOM.taskList.insertBefore(ph, children[newIdx] === ph ? children[newIdx+1] : children[newIdx]);
+    flipAnimate(itemsInList(), before);
+  }
+}
 
-  flipAnimate(itemsInList(), before);
+function autoScrollLoop() {
+  if (!drag) return;
+  
+  let scrolled = false;
+  const topEdge = 100;
+  const bottomEdge = window.innerHeight - 100;
+
+  if (drag.clientY < topEdge) { 
+    // Scroll faster the closer they get to the edge
+    const speed = Math.max(5, (topEdge - drag.clientY) * 0.3);
+    window.scrollBy(0, -speed); 
+    scrolled = true; 
+  } else if (drag.clientY > bottomEdge) { 
+    const speed = Math.max(5, (drag.clientY - bottomEdge) * 0.3);
+    window.scrollBy(0, speed); 
+    scrolled = true; 
+  }
+  
+  if (scrolled) {
+    updatePlaceholder(drag.clientY);
+  }
+  
+  drag.scrollRAF = requestAnimationFrame(autoScrollLoop);
+}
+
+function onPointerMove(e) {
+  if (!drag) return;
+  const { item, ph, ox, oy } = drag;
+  drag.clientY = e.clientY;
+
+  item.style.left = (e.clientX - ox) + 'px';
+  item.style.top  = (e.clientY - oy) + 'px';
+
+  // Check delete zone (target the trash icon specifically to allow scrolling on the sides)
+  const trashRect = DOM.deleteZone.querySelector('.delete-zone__content').getBoundingClientRect();
+  const padding = 30; // Forgiving hit area
+  const inDeleteZone = 
+    e.clientX >= trashRect.left - padding && 
+    e.clientX <= trashRect.right + padding && 
+    e.clientY >= trashRect.top - padding && 
+    e.clientY <= trashRect.bottom + padding;
+  
+  if (inDeleteZone !== drag.isDeleting) {
+    const items = itemsInList();
+    const before = captureRects(items);
+    
+    drag.isDeleting = inDeleteZone;
+    
+    if (inDeleteZone) {
+      item.style.transform = 'scale(0)';
+      DOM.deleteZone.classList.add('delete-zone--hover');
+      ph.style.display = 'none'; // Hide placeholder to collapse list
+    } else {
+      item.style.transform = 'scale(1)';
+      DOM.deleteZone.classList.remove('delete-zone--hover');
+      ph.style.display = ''; // Restore placeholder
+    }
+    
+    flipAnimate(itemsInList(), before);
+  }
+
+  updatePlaceholder(drag.clientY);
 }
 
 function onPointerUp(e) {
@@ -573,10 +636,28 @@ function onPointerUp(e) {
   const { item, ph, pointerId } = drag;
 
   try { item.releasePointerCapture(pointerId); } catch(_) {}
+  
+  cancelAnimationFrame(drag.scrollRAF);
 
   window.removeEventListener('pointermove', onPointerMove);
   window.removeEventListener('pointerup',   onPointerUp);
   window.removeEventListener('pointercancel', onPointerUp);
+
+  // Restore FAB and hide Delete Zone
+  DOM.fabContainer.classList.remove('fab-container--hidden');
+  DOM.deleteZone.classList.remove('delete-zone--active');
+  DOM.deleteZone.classList.remove('delete-zone--hover');
+
+  if (drag.isDeleting) {
+    // Actual delete logic
+    item.remove();
+    ph.remove();
+    tasks = tasks.filter(t => t.id !== item.dataset.id);
+    saveTasks();
+    updateZebraStripes(DOM.taskList);
+    drag = null;
+    return;
+  }
 
   // Fly item back to slot
   const pr = ph.getBoundingClientRect();
