@@ -86,8 +86,13 @@ async function loadTasks() {
         position: d.position
       }));
       
+      // Sort both identically for stable comparison
+      const sortFn = (a, b) => a.id.localeCompare(b.id);
+      const stableLocal = [...tasks].sort(sortFn);
+      const stableRemote = [...newTasks].sort(sortFn);
+      
       // Simple diff to prevent DOM flash if data is identical
-      if (JSON.stringify(tasks) === JSON.stringify(newTasks)) {
+      if (JSON.stringify(stableLocal) === JSON.stringify(stableRemote)) {
         return;
       }
       
