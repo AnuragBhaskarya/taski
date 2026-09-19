@@ -295,12 +295,14 @@ function renderCompletedTasks() {
 // ── Modal logic ──
 DOM.fabAdd.addEventListener('click', () => {
   DOM.addModal.classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
   DOM.modalInput.value = '';
   DOM.modalInput.focus();
 });
 
 function closeModal() {
   DOM.addModal.classList.add('hidden');
+  document.body.style.overflow = '';
 }
 
 DOM.modalCancel.addEventListener('click', closeModal);
