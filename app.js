@@ -20,7 +20,13 @@ const DOM = {
   completedEmpty: document.getElementById('completedEmpty'),
 };
 
-let tasks = [];
+let tasks = JSON.parse(localStorage.getItem('taski_tasks') || '[]');
+
+// Instant Paint! Render cache immediately before any network requests
+if (tasks.length > 0) {
+  renderActiveTasks();
+  renderCompletedTasks();
+}
 
 async function initApp() {
   try {
@@ -66,6 +72,7 @@ async function loadTasks() {
       }
       
       tasks = newTasks;
+      saveTasks(); // Update cache with fresh data
       renderActiveTasks();
       renderCompletedTasks();
     }
@@ -74,8 +81,8 @@ async function loadTasks() {
   }
 }
 
-async function saveTasks() {
-  // Handled per-action now
+function saveTasks() {
+  localStorage.setItem('taski_tasks', JSON.stringify(tasks));
 }
 
 
@@ -326,6 +333,7 @@ DOM.modalConfirm.addEventListener('click', () => {
   };
 
   tasks.push(newTask);
+  saveTasks(); // instant cache
   const el = createTaskElement(newTask);
   el.classList.add('card--animate-in');
   DOM.taskList.appendChild(el);
@@ -400,6 +408,7 @@ function handleTaskComplete(e, li, id) {
   if (task) {
     task.completed = true;
     task.completedAt = Date.now();
+    saveTasks(); // instant cache
     db.from('tasks').update({ completed: true, completedAt: task.completedAt }).eq('id', task.id).then();
   }
 
@@ -470,6 +479,7 @@ function handleUntick(li, id) {
     task.completedAt = null;
     const activeTasks = tasks.filter(t => !t.completed);
     task.position = activeTasks.length > 0 ? activeTasks[activeTasks.length - 1].position + 1000 : 1000;
+    saveTasks(); // instant cache
     db.from('tasks').update({ completed: false, completedAt: null, position: task.position }).eq('id', task.id).then();
   }
 
@@ -851,6 +861,7 @@ function onPointerUp(e) {
       el.remove();
       item.remove();
       tasks = tasks.filter(t => t.id !== item.dataset.id);
+      saveTasks(); // instant cache
       db.from('tasks').delete().eq('id', item.dataset.id).then();
       updateZebraStripes(DOM.taskList);
     });
@@ -906,6 +917,7 @@ function onPointerUp(e) {
       return a.position - b.position;
     });
 
+    saveTasks(); // instant cache
     db.from('tasks').update({ position: newPos }).eq('id', droppedTask.id).then();
     updateZebraStripes(DOM.taskList);
     drag = null;
