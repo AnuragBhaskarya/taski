@@ -30,19 +30,29 @@ if (tasks.length > 0) {
 
 let pendingMutations = 0;
 let pendingLoad = false;
+let mutationCooldown = 0;
+const COOLDOWN_MS = 600;
 
 async function executeMutation(promise) {
   pendingMutations++;
+  mutationCooldown = Date.now() + COOLDOWN_MS;
   try {
     return await promise;
   } catch (e) {
     console.error('Mutation error:', e);
   } finally {
     pendingMutations--;
-    if (pendingMutations === 0 && pendingLoad && !document.body.classList.contains('is-dragging')) {
-      pendingLoad = false;
-      loadTasks();
-    }
+    mutationCooldown = Date.now() + COOLDOWN_MS;
+    
+    // Check if we need to load after the cooldown expires
+    setTimeout(() => {
+      if (pendingMutations === 0 && pendingLoad && !document.body.classList.contains('is-dragging')) {
+        if (Date.now() >= mutationCooldown - 50) { // small buffer
+          pendingLoad = false;
+          loadTasks();
+        }
+      }
+    }, COOLDOWN_MS + 50);
   }
 }
 
@@ -57,7 +67,7 @@ async function initApp() {
     db
       .channel('tasks')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, payload => {
-        if (document.body.classList.contains('is-dragging') || pendingMutations > 0) {
+        if (document.body.classList.contains('is-dragging') || pendingMutations > 0 || Date.now() < mutationCooldown) {
           pendingLoad = true;
           return;
         }
@@ -947,8 +957,17 @@ function onPointerUp(e) {
     drag = null;
 
     if (pendingMutations === 0 && pendingLoad && !document.body.classList.contains('is-dragging')) {
-      pendingLoad = false;
-      loadTasks();
+      if (Date.now() >= mutationCooldown - 50) {
+        pendingLoad = false;
+        loadTasks();
+      } else {
+        setTimeout(() => {
+          if (pendingMutations === 0 && pendingLoad && !document.body.classList.contains('is-dragging') && Date.now() >= mutationCooldown - 50) {
+            pendingLoad = false;
+            loadTasks();
+          }
+        }, mutationCooldown - Date.now() + 50);
+      }
     }
   }
 
