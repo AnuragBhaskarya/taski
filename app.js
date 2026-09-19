@@ -1,6 +1,6 @@
 let supabaseUrl = '';
 let supabaseKey = '';
-let supabase = null;
+let db = null;
 
 const DOM = {
   themeToggle: document.getElementById('themeToggle'),
@@ -28,9 +28,9 @@ async function initApp() {
     const env = await res.json();
     supabaseUrl = env.url;
     supabaseKey = env.key;
-    supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
+    db = window.supabase.createClient(supabaseUrl, supabaseKey);
     
-    supabase
+    db
       .channel('tasks')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, payload => {
         if (!document.body.classList.contains('is-dragging')) {
@@ -42,6 +42,7 @@ async function initApp() {
     await loadTasks();
   } catch (e) {
     console.error('Failed to initialize app', e);
+    alert("Could not load database credentials. If testing locally, you must run 'npx wrangler pages dev'.");
   }
 }
 
@@ -49,7 +50,7 @@ initApp();
 
 async function loadTasks() {
   try {
-    const { data, error } = await supabase.from('tasks').select('*').order('position', { ascending: true });
+    const { data, error } = await db.from('tasks').select('*').order('position', { ascending: true });
     if (!error && data) {
       tasks = data.map(d => ({
         id: d.id,
@@ -317,7 +318,7 @@ DOM.modalConfirm.addEventListener('click', () => {
   updateZebraStripes(DOM.taskList);
   closeModal();
 
-  supabase.from('tasks').insert([{
+  db.from('tasks').insert([{
     id: newTask.id,
     text: newTask.title,
     completed: newTask.completed,
@@ -376,7 +377,7 @@ function handleTaskComplete(e, li, id) {
   if (task) {
     task.completed = true;
     task.completedAt = Date.now();
-    supabase.from('tasks').update({ completed: true, completedAt: task.completedAt }).eq('id', task.id).then();
+    db.from('tasks').update({ completed: true, completedAt: task.completedAt }).eq('id', task.id).then();
   }
 
   li.classList.add('topic-item--complete', 'topic-item--celebrate');
@@ -446,7 +447,7 @@ function handleUntick(li, id) {
     task.completedAt = null;
     const activeTasks = tasks.filter(t => !t.completed);
     task.position = activeTasks.length > 0 ? activeTasks[activeTasks.length - 1].position + 1000 : 1000;
-    supabase.from('tasks').update({ completed: false, completedAt: null, position: task.position }).eq('id', task.id).then();
+    db.from('tasks').update({ completed: false, completedAt: null, position: task.position }).eq('id', task.id).then();
   }
 
   // Animate out of completed panel (driven by spring physics)
@@ -827,7 +828,7 @@ function onPointerUp(e) {
       el.remove();
       item.remove();
       tasks = tasks.filter(t => t.id !== item.dataset.id);
-      supabase.from('tasks').delete().eq('id', item.dataset.id).then();
+      db.from('tasks').delete().eq('id', item.dataset.id).then();
       updateZebraStripes(DOM.taskList);
     });
     
@@ -882,7 +883,7 @@ function onPointerUp(e) {
       return a.position - b.position;
     });
 
-    supabase.from('tasks').update({ position: newPos }).eq('id', droppedTask.id).then();
+    db.from('tasks').update({ position: newPos }).eq('id', droppedTask.id).then();
     updateZebraStripes(DOM.taskList);
     drag = null;
   }
@@ -900,4 +901,3 @@ window.addEventListener('touchmove', (e) => {
 }, { passive: false });
 
 // ── Init ──
-loadTasks();
