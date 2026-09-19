@@ -16,10 +16,29 @@ const DOM = {
   completedEmpty: document.getElementById('completedEmpty'),
 };
 
-let tasks = JSON.parse(localStorage.getItem('taski_tasks')) || [];
+let tasks = [];
 
-function saveTasks() {
-  localStorage.setItem('taski_tasks', JSON.stringify(tasks));
+async function loadTasks() {
+  try {
+    const res = await fetch('/api/tasks', { cache: 'no-store' });
+    if (res.ok) {
+      tasks = await res.json();
+    }
+  } catch (e) {
+    console.error('Failed to load tasks', e);
+  }
+  renderActiveTasks();
+}
+
+async function saveTasks() {
+  try {
+    await fetch('/api/tasks', {
+      method: 'POST',
+      body: JSON.stringify(tasks)
+    });
+  } catch (e) {
+    console.error('Failed to save tasks', e);
+  }
 }
 
 
@@ -221,7 +240,7 @@ function renderActiveTasks() {
 
 function renderCompletedTasks() {
   DOM.completedList.innerHTML = '';
-  const completed = tasks.filter(t => t.completed);
+  const completed = tasks.filter(t => t.completed).sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
   completed.forEach(t => {
     const el = createTaskElement(t, true);
     el.classList.remove('card--animate-in');
@@ -339,6 +358,16 @@ function handleTaskComplete(e, li, id) {
     
     const startHeight = li.offsetHeight;
 
+      // Flash the completed icon in header after 100ms artificial delay
+      setTimeout(() => {
+        DOM.completedBtn.classList.remove('header-icon-btn--flash');
+        DOM.completedBtn.offsetHeight; // Force reflow
+        DOM.completedBtn.classList.add('header-icon-btn--flash');
+        DOM.completedBtn.addEventListener('animationend', () => {
+          DOM.completedBtn.classList.remove('header-icon-btn--flash');
+        }, { once: true });
+      }, 100);
+
     animateSpring(li, startHeight, 0, (y, el) => {
       // y goes from startHeight to 0 with spring physics
       const progress = y / startHeight; // 1 down to 0
@@ -359,16 +388,8 @@ function handleTaskComplete(e, li, id) {
       
     }, (el) => {
       el.remove();
-
-      // Flash the completed icon in header
-      DOM.completedBtn.classList.remove('header-icon-btn--flash');
-      DOM.completedBtn.offsetHeight; // Force reflow
-      DOM.completedBtn.classList.add('header-icon-btn--flash');
-      DOM.completedBtn.addEventListener('animationend', () => {
-        DOM.completedBtn.classList.remove('header-icon-btn--flash');
-      }, { once: true });
     });
-  }, 1000);
+  }, 200);
 }
 
 
@@ -479,6 +500,8 @@ function spawnRipple(li, cb) {
 // ══════════════════════════════════════════════════
 
 let drag = null;
+let potentialDrag = null;
+let longPressTimeout = null;
 
 function itemsInList() {
   return Array.from(DOM.taskList.querySelectorAll('.topic-item'));
@@ -487,12 +510,33 @@ function itemsInList() {
 function onPointerDown(e) {
   if (e.target.closest('.cb-hit') || e.target.closest('input') || drag) return;
   const item = e.currentTarget;
-  e.preventDefault();
 
-  // Capture pointer so touch events keep firing
   item.setPointerCapture(e.pointerId);
 
-  const rect = item.getBoundingClientRect();
+  potentialDrag = {
+    item,
+    pointerId: e.pointerId,
+    startX: e.clientX,
+    startY: e.clientY,
+    rect: item.getBoundingClientRect()
+  };
+
+  longPressTimeout = setTimeout(() => {
+    if (!potentialDrag) return;
+    if (navigator.vibrate) navigator.vibrate(50);
+    startDrag(potentialDrag, true);
+  }, 100);
+
+  window.addEventListener('pointermove', onPointerMove);
+  window.addEventListener('pointerup',   onPointerUp);
+  window.addEventListener('pointercancel', onPointerUp);
+}
+
+function startDrag(pd, isReordering) {
+  clearTimeout(longPressTimeout);
+  
+  const item = pd.item;
+  const rect = pd.rect;
 
   // Kill any running spring
   const s = spring(item);
@@ -530,32 +574,29 @@ function onPointerDown(e) {
   item.style.margin = '0';
   item.style.zIndex = '9000';
   item.style.pointerEvents = 'none';
-  // Use a transition for smooth box-shadow when entering/leaving delete zone.
-  // Transform is controlled continuously by JS via progress.
   item.style.transition = 'box-shadow 0.25s ease';
   document.body.appendChild(item);
 
   drag = {
     item, ph,
-    pointerId: e.pointerId,
-    ox: e.clientX - rect.left,
-    oy: e.clientY - rect.top,
+    isReordering,
+    pointerId: pd.pointerId,
+    ox: pd.startX - rect.left,
+    oy: pd.startY - rect.top,
     isDeleting: false,
-    startY: e.clientY,
-    clientY: e.clientY,
-    clientX: e.clientX,
+    startY: pd.startY,
+    clientY: pd.startY,
+    clientX: pd.startX,
     initialLeft: rect.left,
     itemWidth: rect.width
   };
 
   // Hide FAB during drag
-  DOM.fabContainer.classList.add('fab-container--hidden');
-
-  window.addEventListener('pointermove', onPointerMove);
-  window.addEventListener('pointerup',   onPointerUp);
-  window.addEventListener('pointercancel', onPointerUp);
+  document.body.classList.add('is-dragging');
+  document.getElementById('fabContainer').classList.add('fab-hide');
 
   drag.scrollRAF = requestAnimationFrame(autoScrollLoop);
+  potentialDrag = null;
 }
 
 function updatePlaceholder(dragY) {
@@ -616,6 +657,33 @@ function autoScrollLoop() {
 }
 
 function onPointerMove(e) {
+  if (potentialDrag && !drag) {
+    const dx = e.clientX - potentialDrag.startX;
+    const dy = e.clientY - potentialDrag.startY;
+    
+    // If user moves significantly before the long-press timer triggers
+    if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+      clearTimeout(longPressTimeout);
+      
+      // If mostly horizontal, trigger swipe-to-delete drag
+      if (Math.abs(dx) > Math.abs(dy)) {
+        startDrag(potentialDrag, false);
+      } else {
+        // If mostly vertical, let the browser scroll natively.
+        // We cancel potential drag completely.
+        try { potentialDrag.item.releasePointerCapture(potentialDrag.pointerId); } catch(_) {}
+        potentialDrag = null;
+        window.removeEventListener('pointermove', onPointerMove);
+        window.removeEventListener('pointerup',   onPointerUp);
+        window.removeEventListener('pointercancel', onPointerUp);
+        return;
+      }
+    } else {
+      // Haven't moved enough to cancel timer, wait.
+      return;
+    }
+  }
+
   if (!drag) return;
   const { item, ph, ox, oy, initialLeft, itemWidth } = drag;
   drag.clientY = e.clientY;
@@ -674,6 +742,16 @@ function onPointerMove(e) {
 }
 
 function onPointerUp(e) {
+  if (potentialDrag && !drag) {
+    clearTimeout(longPressTimeout);
+    try { potentialDrag.item.releasePointerCapture(potentialDrag.pointerId); } catch(_) {}
+    potentialDrag = null;
+    window.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup',   onPointerUp);
+    window.removeEventListener('pointercancel', onPointerUp);
+    return;
+  }
+
   if (!drag) return;
   const { item, ph, pointerId } = drag;
 
@@ -686,7 +764,8 @@ function onPointerUp(e) {
   window.removeEventListener('pointercancel', onPointerUp);
 
   // Restore FAB
-  DOM.fabContainer.classList.remove('fab-container--hidden');
+  document.getElementById('fabContainer').classList.remove('fab-hide');
+  document.body.classList.remove('is-dragging');
 
   if (drag.isDeleting) {
     // Delete animation
@@ -730,7 +809,17 @@ function onPointerUp(e) {
 
     // Sync data
     const ids = Array.from(DOM.taskList.querySelectorAll('.topic-item')).map(e=>e.dataset.id);
-    tasks.sort((a,b) => ids.indexOf(a.id) - ids.indexOf(b.id));
+    tasks.sort((a, b) => {
+      const ia = ids.indexOf(a.id);
+      const ib = ids.indexOf(b.id);
+      // Both completed
+      if (ia === -1 && ib === -1) return (b.completedAt || 0) - (a.completedAt || 0);
+      // One completed, push to end
+      if (ia === -1) return 1;
+      if (ib === -1) return -1;
+      // Both active
+      return ia - ib;
+    });
     saveTasks();
     updateZebraStripes(DOM.taskList);
     drag = null;
@@ -741,5 +830,12 @@ function onPointerUp(e) {
 }
 
 
+// Prevent scrolling while dragging
+window.addEventListener('touchmove', (e) => {
+  if (drag) {
+    e.preventDefault();
+  }
+}, { passive: false });
+
 // ── Init ──
-renderActiveTasks();
+loadTasks();
