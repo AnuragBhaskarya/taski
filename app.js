@@ -28,6 +28,24 @@ if (tasks.length > 0) {
   renderCompletedTasks();
 }
 
+let pendingMutations = 0;
+let pendingLoad = false;
+
+async function executeMutation(promise) {
+  pendingMutations++;
+  try {
+    return await promise;
+  } catch (e) {
+    console.error('Mutation error:', e);
+  } finally {
+    pendingMutations--;
+    if (pendingMutations === 0 && pendingLoad && !document.body.classList.contains('is-dragging')) {
+      pendingLoad = false;
+      loadTasks();
+    }
+  }
+}
+
 async function initApp() {
   try {
     const res = await fetch('/api/env');
@@ -39,9 +57,11 @@ async function initApp() {
     db
       .channel('tasks')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, payload => {
-        if (!document.body.classList.contains('is-dragging')) {
-          loadTasks();
+        if (document.body.classList.contains('is-dragging') || pendingMutations > 0) {
+          pendingLoad = true;
+          return;
         }
+        loadTasks();
       })
       .subscribe();
 
@@ -342,7 +362,7 @@ DOM.modalConfirm.addEventListener('click', () => {
 
   DOM.modalConfirm.disabled = true;
   
-  db.from('tasks').insert([{
+  executeMutation(db.from('tasks').insert([{
     id: newTask.id,
     text: newTask.title,
     completed: newTask.completed,
@@ -350,9 +370,8 @@ DOM.modalConfirm.addEventListener('click', () => {
     position: newTask.position
   }]).then(({error}) => { 
     DOM.modalConfirm.disabled = false;
-    // 23505 = duplicate key constraint. Safe to ignore if network retries caused it.
     if (error && error.code !== '23505') console.error(error); 
-  });
+  }));
 
   DOM.modalInput.value = '';
   closeModal();
@@ -409,7 +428,7 @@ function handleTaskComplete(e, li, id) {
     task.completed = true;
     task.completedAt = Date.now();
     saveTasks(); // instant cache
-    db.from('tasks').update({ completed: true, completedAt: task.completedAt }).eq('id', task.id).then();
+    executeMutation(db.from('tasks').update({ completed: true, completedAt: task.completedAt }).eq('id', task.id));
   }
 
   li.classList.add('topic-item--complete', 'topic-item--celebrate');
@@ -480,7 +499,7 @@ function handleUntick(li, id) {
     const activeTasks = tasks.filter(t => !t.completed);
     task.position = activeTasks.length > 0 ? activeTasks[activeTasks.length - 1].position + 1000 : 1000;
     saveTasks(); // instant cache
-    db.from('tasks').update({ completed: false, completedAt: null, position: task.position }).eq('id', task.id).then();
+    executeMutation(db.from('tasks').update({ completed: false, completedAt: null, position: task.position }).eq('id', task.id));
   }
 
   // Animate out of completed panel (driven by spring physics)
@@ -862,7 +881,7 @@ function onPointerUp(e) {
       item.remove();
       tasks = tasks.filter(t => t.id !== item.dataset.id);
       saveTasks(); // instant cache
-      db.from('tasks').delete().eq('id', item.dataset.id).then();
+      executeMutation(db.from('tasks').delete().eq('id', item.dataset.id));
       updateZebraStripes(DOM.taskList);
     });
     
@@ -918,9 +937,14 @@ function onPointerUp(e) {
     });
 
     saveTasks(); // instant cache
-    db.from('tasks').update({ position: newPos }).eq('id', droppedTask.id).then();
+    executeMutation(db.from('tasks').update({ position: newPos }).eq('id', droppedTask.id));
     updateZebraStripes(DOM.taskList);
     drag = null;
+
+    if (pendingMutations === 0 && pendingLoad && !document.body.classList.contains('is-dragging')) {
+      pendingLoad = false;
+      loadTasks();
+    }
   }
 
   item.addEventListener('transitionend', settle, { once: true });
