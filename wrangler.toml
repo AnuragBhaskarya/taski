@@ -1,6 +1,0 @@
-name = "taski"
-pages_build_output_dir = "."
-
-[[kv_namespaces]]
-binding = "TASKI_KV"
-id = "ef0358011d554c1cb1a7f5b595fdf5dd"

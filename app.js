@@ -1,3 +1,7 @@
+let supabaseUrl = '';
+let supabaseKey = '';
+let supabase = null;
+
 const DOM = {
   themeToggle: document.getElementById('themeToggle'),
   themeIconMoon: document.getElementById('themeIconMoon'),
@@ -18,11 +22,42 @@ const DOM = {
 
 let tasks = [];
 
+async function initApp() {
+  try {
+    const res = await fetch('/api/env');
+    const env = await res.json();
+    supabaseUrl = env.url;
+    supabaseKey = env.key;
+    supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
+    
+    supabase
+      .channel('tasks')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, payload => {
+        if (!document.body.classList.contains('is-dragging')) {
+          loadTasks();
+        }
+      })
+      .subscribe();
+
+    await loadTasks();
+  } catch (e) {
+    console.error('Failed to initialize app', e);
+  }
+}
+
+initApp();
+
 async function loadTasks() {
   try {
-    const res = await fetch('/api/tasks', { cache: 'no-store' });
-    if (res.ok) {
-      tasks = await res.json();
+    const { data, error } = await supabase.from('tasks').select('*').order('position', { ascending: true });
+    if (!error && data) {
+      tasks = data.map(d => ({
+        id: d.id,
+        title: d.text,
+        completed: d.completed,
+        completedAt: d.completedAt,
+        position: d.position
+      }));
     }
   } catch (e) {
     console.error('Failed to load tasks', e);
@@ -31,14 +66,7 @@ async function loadTasks() {
 }
 
 async function saveTasks() {
-  try {
-    await fetch('/api/tasks', {
-      method: 'POST',
-      body: JSON.stringify(tasks)
-    });
-  } catch (e) {
-    console.error('Failed to save tasks', e);
-  }
+  // Handled per-action now
 }
 
 
@@ -271,20 +299,31 @@ DOM.modalConfirm.addEventListener('click', () => {
   const title = DOM.modalInput.value.trim();
   if (!title) return;
 
+  const activeTasks = tasks.filter(t => !t.completed);
+  const pos = activeTasks.length > 0 ? activeTasks[activeTasks.length - 1].position + 1000 : 1000;
+
   const newTask = {
-    id: Date.now().toString(),
+    id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
     title,
     completed: false,
-    completedAt: null
+    completedAt: null,
+    position: pos
   };
 
   tasks.push(newTask);
-  saveTasks();
   const el = createTaskElement(newTask);
   el.classList.add('card--animate-in');
   DOM.taskList.appendChild(el);
   updateZebraStripes(DOM.taskList);
   closeModal();
+
+  supabase.from('tasks').insert([{
+    id: newTask.id,
+    text: newTask.title,
+    completed: newTask.completed,
+    completedAt: newTask.completedAt,
+    position: newTask.position
+  }]).then(({error}) => { if (error) console.error(error); });
 });
 
 DOM.modalInput.addEventListener('keydown', e => {
@@ -329,14 +368,17 @@ DOM.completedClose.addEventListener('click', closeCompletedPanel);
 // ══════════════════════════════════
 
 function handleTaskComplete(e, li, id) {
+  e.preventDefault();
   const cb = e.target;
-  if (!cb.checked) return;
+  cb.checked = true;
 
-  // Mark data
   const task = tasks.find(t => t.id === id);
-  if (task) { task.completed = true; task.completedAt = Date.now(); saveTasks(); }
+  if (task) {
+    task.completed = true;
+    task.completedAt = Date.now();
+    supabase.from('tasks').update({ completed: true, completedAt: task.completedAt }).eq('id', task.id).then();
+  }
 
-  // Visual: strike through + celebrate
   li.classList.add('topic-item--complete', 'topic-item--celebrate');
   const td = li.querySelector('.task-time');
   if (td) td.textContent = 'Completed ' + new Date(task.completedAt).toLocaleString();
@@ -402,7 +444,9 @@ function handleUntick(li, id) {
   if (task) {
     task.completed = false;
     task.completedAt = null;
-    saveTasks();
+    const activeTasks = tasks.filter(t => !t.completed);
+    task.position = activeTasks.length > 0 ? activeTasks[activeTasks.length - 1].position + 1000 : 1000;
+    supabase.from('tasks').update({ completed: false, completedAt: null, position: task.position }).eq('id', task.id).then();
   }
 
   // Animate out of completed panel (driven by spring physics)
@@ -783,7 +827,7 @@ function onPointerUp(e) {
       el.remove();
       item.remove();
       tasks = tasks.filter(t => t.id !== item.dataset.id);
-      saveTasks();
+      supabase.from('tasks').delete().eq('id', item.dataset.id).then();
       updateZebraStripes(DOM.taskList);
     });
     
@@ -808,19 +852,37 @@ function onPointerUp(e) {
     ph.remove();
 
     // Sync data
-    const ids = Array.from(DOM.taskList.querySelectorAll('.topic-item')).map(e=>e.dataset.id);
+    const nodes = Array.from(DOM.taskList.querySelectorAll('.topic-item'));
+    const newDOMIdx = nodes.indexOf(item);
+    const droppedTask = tasks.find(t => t.id === item.dataset.id);
+    
+    let newPos = 1000;
+    if (nodes.length === 1) {
+      newPos = 1000;
+    } else if (newDOMIdx === 0) {
+      const nextId = nodes[1].dataset.id;
+      const nextTask = tasks.find(t => t.id === nextId);
+      newPos = nextTask.position / 2;
+    } else if (newDOMIdx === nodes.length - 1) {
+      const prevId = nodes[nodes.length - 2].dataset.id;
+      const prevTask = tasks.find(t => t.id === prevId);
+      newPos = prevTask.position + 1000;
+    } else {
+      const prevId = nodes[newDOMIdx - 1].dataset.id;
+      const nextId = nodes[newDOMIdx + 1].dataset.id;
+      const prevTask = tasks.find(t => t.id === prevId);
+      const nextTask = tasks.find(t => t.id === nextId);
+      newPos = (prevTask.position + nextTask.position) / 2;
+    }
+    droppedTask.position = newPos;
+
     tasks.sort((a, b) => {
-      const ia = ids.indexOf(a.id);
-      const ib = ids.indexOf(b.id);
-      // Both completed
-      if (ia === -1 && ib === -1) return (b.completedAt || 0) - (a.completedAt || 0);
-      // One completed, push to end
-      if (ia === -1) return 1;
-      if (ib === -1) return -1;
-      // Both active
-      return ia - ib;
+      if (a.completed !== b.completed) return a.completed ? 1 : -1;
+      if (a.completed) return (b.completedAt || 0) - (a.completedAt || 0);
+      return a.position - b.position;
     });
-    saveTasks();
+
+    supabase.from('tasks').update({ position: newPos }).eq('id', droppedTask.id).then();
     updateZebraStripes(DOM.taskList);
     drag = null;
   }
