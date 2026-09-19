@@ -1,0 +1,611 @@
+const DOM = {
+  themeToggle: document.getElementById('themeToggle'),
+  themeIconMoon: document.getElementById('themeIconMoon'),
+  themeIconSun: document.getElementById('themeIconSun'),
+  taskList: document.getElementById('taskList'),
+  fabAdd: document.getElementById('fabAdd'),
+  addModal: document.getElementById('addModal'),
+  modalInput: document.getElementById('modalInput'),
+  modalCancel: document.getElementById('modalCancel'),
+  modalConfirm: document.getElementById('modalConfirm'),
+  completedBtn: document.getElementById('completedBtn'),
+  completedPanel: document.getElementById('completedPanel'),
+  completedClose: document.getElementById('completedClose'),
+  completedList: document.getElementById('completedList'),
+  completedEmpty: document.getElementById('completedEmpty'),
+};
+
+let tasks = JSON.parse(localStorage.getItem('taski_tasks')) || [];
+
+function saveTasks() {
+  localStorage.setItem('taski_tasks', JSON.stringify(tasks));
+}
+
+
+// ── Theme ──
+function applyThemeIcons(isDark) {
+  DOM.themeIconMoon.style.display = isDark ? 'none' : 'block';
+  DOM.themeIconSun.style.display  = isDark ? 'block' : 'none';
+}
+
+const currentTheme = localStorage.getItem('taski_theme') || 'light';
+if (currentTheme === 'dark') {
+  document.documentElement.classList.add('dark');
+}
+applyThemeIcons(currentTheme === 'dark');
+
+DOM.themeToggle.addEventListener('click', () => {
+  document.documentElement.classList.toggle('dark');
+  const isDark = document.documentElement.classList.contains('dark');
+  localStorage.setItem('taski_theme', isDark ? 'dark' : 'light');
+  applyThemeIcons(isDark);
+});
+
+function escapeHtml(s) {
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;").replace(/'/g,"&#039;");
+}
+
+
+// ══════════════════════════════════════════════════
+//  Spring Physics (matches Framer Motion Reorder)
+//  type:"spring", stiffness:350, damping:30
+// ══════════════════════════════════════════════════
+
+const STIFFNESS = 350;
+const DAMPING = 30;
+const REST_DELTA = 0.5;
+const REST_VELOCITY = 0.5;
+
+const springs = new WeakMap();
+function spring(el) {
+  if (!springs.has(el)) springs.set(el, { y: 0, vy: 0, target: 0, onUpdate: null, onComplete: null });
+  return springs.get(el);
+}
+
+const alive = new Set();
+let loopId = 0;
+
+function runLoop() {
+  let prev = performance.now();
+  const id = ++loopId;
+
+  (function tick(now) {
+    if (id !== loopId) return;
+    const dt = Math.min((now - prev) / 1000, 0.032);
+    prev = now;
+
+    for (const el of alive) {
+      const s = spring(el);
+      const x = s.y - s.target;
+      const a = (-STIFFNESS * x - DAMPING * s.vy);
+      s.vy += a * dt;
+      s.y  += s.vy * dt;
+
+      if (s.onUpdate) {
+        s.onUpdate(s.y, el);
+      } else {
+        el.style.transform = `translateY(${s.y}px)`;
+      }
+
+      if (Math.abs(s.y - s.target) < REST_DELTA && Math.abs(s.vy) < REST_VELOCITY) {
+        s.y = s.target;
+        s.vy = 0;
+        
+        if (s.onUpdate) {
+          s.onUpdate(s.y, el);
+        } else {
+          el.style.transform = s.target === 0 ? '' : `translateY(${s.target}px)`;
+        }
+        
+        alive.delete(el);
+        if (s.onComplete) {
+          s.onComplete(el);
+          s.onComplete = null;
+        }
+        s.onUpdate = null;
+      }
+    }
+
+    if (alive.size) requestAnimationFrame(tick);
+    else loopId = 0;
+  })(prev);
+}
+
+function animateSpring(el, startY, target = 0, onUpdate = null, onComplete = null) {
+  const s = spring(el);
+  s.y = startY;
+  s.target = target;
+  s.onUpdate = onUpdate;
+  s.onComplete = onComplete;
+  alive.add(el);
+  if (!loopId) runLoop();
+}
+
+
+// ══════════════════════════════════
+//  FLIP helper
+// ══════════════════════════════════
+
+function captureRects(elements) {
+  const map = new Map();
+  for (const el of elements) {
+    const s = spring(el);
+    const currentY = s.onUpdate ? 0 : (s.y || 0);
+    const rect = el.getBoundingClientRect();
+    map.set(el, rect.top - currentY);
+  }
+  return map;
+}
+
+function flipAnimate(elements, oldTops) {
+  for (const el of elements) {
+    const oldTop = oldTops.get(el);
+    if (oldTop === undefined) continue;
+
+    const s = spring(el);
+    const currentY = s.onUpdate ? 0 : (s.y || 0);
+    const newRect = el.getBoundingClientRect();
+    const newTop = newRect.top - currentY;
+
+    const dy = oldTop - newTop;
+    if (Math.abs(dy) < 1) continue;
+
+    animateSpring(el, currentY + dy);
+  }
+}
+
+
+// ══════════════════════════════════
+//  Rendering
+// ══════════════════════════════════
+
+function createTaskElement(task, forCompletedPanel = false) {
+  const li = document.createElement('li');
+  li.className = `topic-item ${task.completed ? 'topic-item--complete' : ''}`;
+  li.dataset.id = task.id;
+
+  li.innerHTML = `
+    <label class="cb-hit">
+      <input type="checkbox" class="topic-item__checkbox" ${task.completed ? 'checked' : ''}>
+    </label>
+    <div class="task-content">
+      <div class="task-title">${escapeHtml(task.title)}</div>
+      <div class="task-time">${task.completedAt ? 'Completed ' + new Date(task.completedAt).toLocaleString() : ''}</div>
+    </div>
+  `;
+
+  const cb = li.querySelector('.topic-item__checkbox');
+
+  if (forCompletedPanel) {
+    // In completed panel: unticking restores the task
+    cb.addEventListener('change', () => handleUntick(li, task.id));
+  } else {
+    // In main list: ticking triggers dismiss animation
+    cb.addEventListener('change', e => handleTaskComplete(e, li, task.id));
+    // Clean up entry animation
+    li.classList.add('card--animate-in');
+    li.addEventListener('animationend', () => li.classList.remove('card--animate-in'), { once: true });
+    // Drag
+    li.addEventListener('pointerdown', onPointerDown);
+  }
+
+  return li;
+}
+
+function updateZebraStripes(listElement = DOM.taskList) {
+  const items = Array.from(listElement.querySelectorAll('.topic-item'));
+  items.forEach((item, index) => {
+    // Ignore dismissing items when calculating order
+    if (item.style.pointerEvents === 'none') return;
+    
+    // We need to calculate index ignoring dismissing items
+    const visibleIndex = items.filter(el => el.style.pointerEvents !== 'none').indexOf(item);
+    
+    if (visibleIndex % 2 === 0) {
+      item.classList.add('is-odd');
+      item.classList.remove('is-even');
+    } else {
+      item.classList.add('is-even');
+      item.classList.remove('is-odd');
+    }
+  });
+}
+
+function renderActiveTasks() {
+  DOM.taskList.innerHTML = '';
+  tasks.filter(t => !t.completed).forEach(t => DOM.taskList.appendChild(createTaskElement(t)));
+  updateZebraStripes(DOM.taskList);
+}
+
+function renderCompletedTasks() {
+  DOM.completedList.innerHTML = '';
+  const completed = tasks.filter(t => t.completed);
+  completed.forEach(t => {
+    const el = createTaskElement(t, true);
+    el.classList.remove('card--animate-in');
+    DOM.completedList.appendChild(el);
+  });
+  updateZebraStripes(DOM.completedList);
+  DOM.completedEmpty.style.display = completed.length ? 'none' : 'block';
+}
+
+
+// ── Modal logic ──
+DOM.fabAdd.addEventListener('click', () => {
+  DOM.addModal.classList.remove('hidden');
+  DOM.modalInput.value = '';
+  DOM.modalInput.focus();
+});
+
+function closeModal() {
+  DOM.addModal.classList.add('hidden');
+}
+
+DOM.modalCancel.addEventListener('click', closeModal);
+DOM.addModal.addEventListener('click', e => {
+  if (e.target === DOM.addModal) closeModal();
+});
+
+DOM.modalConfirm.addEventListener('click', () => {
+  const title = DOM.modalInput.value.trim();
+  if (!title) return;
+
+  const newTask = {
+    id: Date.now().toString(),
+    title,
+    completed: false,
+    completedAt: null
+  };
+
+  tasks.push(newTask);
+  saveTasks();
+  const el = createTaskElement(newTask);
+  el.classList.add('card--animate-in');
+  DOM.taskList.appendChild(el);
+  updateZebraStripes(DOM.taskList);
+  closeModal();
+});
+
+DOM.modalInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') DOM.modalConfirm.click();
+  if (e.key === 'Escape') closeModal();
+});
+
+
+// ══════════════════════════════════
+//  Completed Panel
+// ══════════════════════════════════
+
+let completedScrim = null;
+
+function openCompletedPanel() {
+  renderCompletedTasks();
+  DOM.completedPanel.classList.remove('hidden');
+
+  // Create scrim
+  if (!completedScrim) {
+    completedScrim = document.createElement('div');
+    completedScrim.className = 'completed-scrim';
+    completedScrim.addEventListener('click', closeCompletedPanel);
+    document.body.appendChild(completedScrim);
+  }
+  // Force reflow then show
+  completedScrim.offsetHeight;
+  completedScrim.classList.remove('hidden');
+}
+
+function closeCompletedPanel() {
+  DOM.completedPanel.classList.add('hidden');
+  if (completedScrim) completedScrim.classList.add('hidden');
+}
+
+DOM.completedBtn.addEventListener('click', openCompletedPanel);
+DOM.completedClose.addEventListener('click', closeCompletedPanel);
+
+
+// ══════════════════════════════════
+//  Tick → Dismiss Animation
+// ══════════════════════════════════
+
+function handleTaskComplete(e, li, id) {
+  const cb = e.target;
+  if (!cb.checked) return;
+
+  // Mark data
+  const task = tasks.find(t => t.id === id);
+  if (task) { task.completed = true; task.completedAt = Date.now(); saveTasks(); }
+
+  // Visual: strike through + celebrate
+  li.classList.add('topic-item--complete', 'topic-item--celebrate');
+  const td = li.querySelector('.task-time');
+  if (td) td.textContent = 'Completed ' + new Date(task.completedAt).toLocaleString();
+
+  // Confetti + flash + ripple
+  spawnConfetti(li, cb);
+  spawnFlash(li);
+  spawnRipple(li, cb);
+
+  // After 1s: slide left + shrink + green + fade out (driven by spring physics)
+  setTimeout(() => {
+    li.classList.remove('topic-item--celebrate');
+
+    li.style.pointerEvents = 'none';
+    li.style.overflow = 'hidden';
+    
+    // Trigger stripe update immediately so siblings fade colors during the animation
+    updateZebraStripes(DOM.taskList);
+    
+    const startHeight = li.offsetHeight;
+
+    animateSpring(li, startHeight, 0, (y, el) => {
+      // y goes from startHeight to 0 with spring physics
+      const progress = y / startHeight; // 1 down to 0
+      
+      el.style.height = `${y}px`;
+      el.style.marginBottom = `${progress * 8}px`; // original margin is 8px
+      el.style.paddingTop = `${progress * 14}px`; // original padding is 14px
+      el.style.paddingBottom = `${progress * 14}px`; 
+      el.style.borderWidth = `${progress}px`; 
+      el.style.opacity = progress;
+      
+      const slide = (1 - progress) * -60; // 0 to -60%
+      el.style.transform = `translateX(${slide}%) scale(${progress})`;
+      
+      const alpha = 0.8 * (1 - progress);
+      el.style.background = `rgba(42, 156, 115, ${alpha})`;
+      el.style.borderColor = `rgba(42, 156, 115, ${alpha})`;
+      
+    }, (el) => {
+      el.remove();
+
+      // Flash the completed icon in header
+      DOM.completedBtn.classList.remove('header-icon-btn--flash');
+      DOM.completedBtn.offsetHeight; // Force reflow
+      DOM.completedBtn.classList.add('header-icon-btn--flash');
+      DOM.completedBtn.addEventListener('animationend', () => {
+        DOM.completedBtn.classList.remove('header-icon-btn--flash');
+      }, { once: true });
+    });
+  }, 1000);
+}
+
+
+// ══════════════════════════════════
+//  Untick (from completed panel)
+// ══════════════════════════════════
+
+function handleUntick(li, id) {
+  const task = tasks.find(t => t.id === id);
+  if (task) {
+    task.completed = false;
+    task.completedAt = null;
+    saveTasks();
+  }
+
+  // Animate out of completed panel (driven by spring physics)
+  li.style.pointerEvents = 'none';
+  li.style.overflow = 'hidden';
+  updateZebraStripes(DOM.completedList);
+  
+  const startHeight = li.offsetHeight;
+  
+  animateSpring(li, startHeight, 0, (y, el) => {
+    const progress = y / startHeight;
+    el.style.height = `${y}px`;
+    el.style.marginBottom = `${progress * 8}px`;
+    el.style.paddingTop = `${progress * 14}px`;
+    el.style.paddingBottom = `${progress * 14}px`;
+    el.style.borderWidth = `${progress}px`; 
+    el.style.opacity = progress;
+    
+    const slide = (1 - progress) * 60; // 0 to 60%
+    el.style.transform = `translateX(${slide}%) scale(${progress})`;
+  }, (el) => {
+    el.remove();
+    renderCompletedTasks();
+
+    // Add back to main list with animation
+    const newEl = createTaskElement(task);
+    newEl.classList.add('card--animate-in');
+    DOM.taskList.appendChild(newEl);
+    updateZebraStripes(DOM.taskList);
+  });
+}
+
+
+// ══════════════════════════════════
+//  Celebrations
+// ══════════════════════════════════
+
+function spawnConfetti(label, cb) {
+  const r = cb.getBoundingClientRect();
+  const ox = r.left + r.width/2, oy = r.top + r.height/2;
+  const layer = document.createElement('div');
+  layer.className = 'confetti-layer';
+  document.body.appendChild(layer);
+  const cols = ['#2a9c73','#34d399','#10b981','#059669','#6ee7b7','#a7f3d0','#d1fae5','#065f46'];
+  const ps = [];
+  for (let i = 0; i < 35; i++) {
+    const el = document.createElement('div');
+    el.className = 'confetti-particle';
+    const sz = 6+Math.random()*8, rect = Math.random()>.5;
+    el.style.width = sz+'px';
+    el.style.height = (rect ? sz*(.5+Math.random()*.5) : sz)+'px';
+    el.style.borderRadius = rect ? '2px' : '50%';
+    el.style.background = cols[Math.floor(Math.random()*cols.length)];
+    el.style.left = ox+'px'; el.style.top = oy+'px';
+    layer.appendChild(el);
+    const a = -Math.PI/2+(Math.random()-.5)*Math.PI*1.2, sp = 300+Math.random()*500;
+    ps.push({ el, x:ox, y:oy,
+      vx:Math.cos(a)*sp*(.6+Math.random()*.4), vy:Math.sin(a)*sp*(.6+Math.random()*.4),
+      rot:0, rs:(Math.random()-.5)*800, g:600+Math.random()*300,
+      dr:.97+Math.random()*.02, op:1, life:0 });
+  }
+  let st = performance.now(); const ml = 2.5;
+  (function tick(now) {
+    const dt = Math.min((now-st)/1000,.05); st = now; let done = true;
+    for (const p of ps) {
+      if (p.op<=0) continue; done = false;
+      p.life+=dt; p.vy+=p.g*dt; p.vx*=p.dr; p.vy*=p.dr;
+      p.x+=p.vx*dt; p.y+=p.vy*dt; p.rot+=p.rs*dt;
+      if (p.life>ml*.6) p.op = Math.max(0,1-(p.life-ml*.6)/(ml*.4));
+      p.el.style.transform = `translate(-50%,-50%) rotate(${p.rot|0}deg)`;
+      p.el.style.left = p.x.toFixed(1)+'px';
+      p.el.style.top = p.y.toFixed(1)+'px';
+      p.el.style.opacity = p.op.toFixed(2);
+    }
+    if (!done && ps[0].life<ml) requestAnimationFrame(tick); else layer.remove();
+  })(st);
+}
+
+function spawnFlash(li) {
+  const f = document.createElement('div'); f.className='topic-item__flash';
+  li.appendChild(f); setTimeout(()=>f.remove(),650);
+}
+
+function spawnRipple(li, cb) {
+  const lr = li.getBoundingClientRect(), cr = cb.getBoundingClientRect();
+  const rip = document.createElement('div'); rip.className='topic-item__ripple';
+  rip.style.left = (cr.left-lr.left+cr.width/2)+'px';
+  rip.style.top  = (cr.top -lr.top +cr.height/2)+'px';
+  li.appendChild(rip); setTimeout(()=>rip.remove(),550);
+}
+
+
+// ══════════════════════════════════════════════════
+//  Drag Reorder with FLIP + Spring
+// ══════════════════════════════════════════════════
+
+let drag = null;
+
+function itemsInList() {
+  return Array.from(DOM.taskList.querySelectorAll('.topic-item'));
+}
+
+function onPointerDown(e) {
+  if (e.target.closest('.cb-hit') || e.target.closest('input') || drag) return;
+  const item = e.currentTarget;
+  e.preventDefault();
+
+  // Capture pointer so touch events keep firing
+  item.setPointerCapture(e.pointerId);
+
+  const rect = item.getBoundingClientRect();
+
+  // Kill any running spring
+  const s = spring(item);
+  s.y = 0; s.vy = 0; s.target = 0;
+  alive.delete(item);
+  item.style.transform = '';
+
+  // Placeholder
+  const ph = document.createElement('li');
+  ph.className = 'drag-placeholder';
+  ph.style.height = rect.height + 'px';
+  ph.style.marginBottom = getComputedStyle(item).marginBottom;
+  item.parentNode.insertBefore(ph, item);
+
+  // Lift item
+  item.classList.add('drag-active');
+  item.style.position = 'fixed';
+  item.style.width = rect.width + 'px';
+  item.style.left = rect.left + 'px';
+  item.style.top  = rect.top  + 'px';
+  item.style.margin = '0';
+  item.style.zIndex = '9000';
+  item.style.pointerEvents = 'none';
+  item.style.transition = 'none';
+  document.body.appendChild(item);
+
+  drag = {
+    item, ph,
+    pointerId: e.pointerId,
+    ox: e.clientX - rect.left,
+    oy: e.clientY - rect.top,
+  };
+
+  window.addEventListener('pointermove', onPointerMove);
+  window.addEventListener('pointerup',   onPointerUp);
+  window.addEventListener('pointercancel', onPointerUp);
+}
+
+function onPointerMove(e) {
+  if (!drag) return;
+  const { item, ph, ox, oy } = drag;
+
+  item.style.left = (e.clientX - ox) + 'px';
+  item.style.top  = (e.clientY - oy) + 'px';
+
+  // Auto-scroll
+  if (e.clientY < 60) window.scrollBy(0, -10);
+  else if (e.clientY > innerHeight - 60) window.scrollBy(0, 10);
+
+  // Where should the placeholder be?
+  const children = Array.from(DOM.taskList.children);
+  const dragY = e.clientY;
+  let newIdx = children.length;
+
+  for (let i = 0; i < children.length; i++) {
+    const c = children[i];
+    if (c === ph) continue;
+    const cr = c.getBoundingClientRect();
+    const s = spring(c);
+    const mid = (cr.top - (s.y||0)) + cr.height / 2;
+    if (dragY < mid) { newIdx = i; break; }
+  }
+
+  const phIdx = children.indexOf(ph);
+  if (newIdx === phIdx) return;
+
+  // FLIP
+  const items = itemsInList();
+  const before = captureRects(items);
+
+  if (newIdx >= children.length) DOM.taskList.appendChild(ph);
+  else DOM.taskList.insertBefore(ph, children[newIdx] === ph ? children[newIdx+1] : children[newIdx]);
+
+  flipAnimate(itemsInList(), before);
+}
+
+function onPointerUp(e) {
+  if (!drag) return;
+  const { item, ph, pointerId } = drag;
+
+  try { item.releasePointerCapture(pointerId); } catch(_) {}
+
+  window.removeEventListener('pointermove', onPointerMove);
+  window.removeEventListener('pointerup',   onPointerUp);
+  window.removeEventListener('pointercancel', onPointerUp);
+
+  // Fly item back to slot
+  const pr = ph.getBoundingClientRect();
+  item.style.transition = 'left .25s cubic-bezier(.25,1,.5,1), top .25s cubic-bezier(.25,1,.5,1), transform .25s cubic-bezier(.25,1,.5,1)';
+  item.style.left = pr.left + 'px';
+  item.style.top  = pr.top  + 'px';
+  item.style.transform = 'scale(1)';
+
+  function settle() {
+    item.removeEventListener('transitionend', settle);
+    clearTimeout(fallback);
+
+    item.classList.remove('drag-active');
+    item.style.cssText = '';
+    DOM.taskList.insertBefore(item, ph);
+    ph.remove();
+
+    // Sync data
+    const ids = Array.from(DOM.taskList.querySelectorAll('.topic-item')).map(e=>e.dataset.id);
+    tasks.sort((a,b) => ids.indexOf(a.id) - ids.indexOf(b.id));
+    saveTasks();
+    updateZebraStripes(DOM.taskList);
+    drag = null;
+  }
+
+  item.addEventListener('transitionend', settle, { once: true });
+  const fallback = setTimeout(settle, 300);
+}
+
+
+// ── Init ──
+renderActiveTasks();
