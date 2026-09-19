@@ -52,18 +52,26 @@ async function loadTasks() {
   try {
     const { data, error } = await db.from('tasks').select('*').order('position', { ascending: true });
     if (!error && data) {
-      tasks = data.map(d => ({
+      const newTasks = data.map(d => ({
         id: d.id,
         title: d.text,
         completed: d.completed,
         completedAt: d.completedAt,
         position: d.position
       }));
+      
+      // Simple diff to prevent DOM flash if data is identical
+      if (JSON.stringify(tasks) === JSON.stringify(newTasks)) {
+        return;
+      }
+      
+      tasks = newTasks;
+      renderActiveTasks();
+      renderCompletedTasks();
     }
   } catch (e) {
     console.error('Failed to load tasks', e);
   }
-  renderActiveTasks();
 }
 
 async function saveTasks() {
@@ -263,7 +271,11 @@ function updateZebraStripes(listElement = DOM.taskList) {
 
 function renderActiveTasks() {
   DOM.taskList.innerHTML = '';
-  tasks.filter(t => !t.completed).forEach(t => DOM.taskList.appendChild(createTaskElement(t)));
+  tasks.filter(t => !t.completed).forEach(t => {
+    const el = createTaskElement(t);
+    // Don't animate-in on generic re-renders to prevent flashing
+    DOM.taskList.appendChild(el);
+  });
   updateZebraStripes(DOM.taskList);
 }
 
@@ -318,13 +330,22 @@ DOM.modalConfirm.addEventListener('click', () => {
   updateZebraStripes(DOM.taskList);
   closeModal();
 
+  DOM.modalConfirm.disabled = true;
+  
   db.from('tasks').insert([{
     id: newTask.id,
     text: newTask.title,
     completed: newTask.completed,
     completedAt: newTask.completedAt,
     position: newTask.position
-  }]).then(({error}) => { if (error) console.error(error); });
+  }]).then(({error}) => { 
+    DOM.modalConfirm.disabled = false;
+    // 23505 = duplicate key constraint. Safe to ignore if network retries caused it.
+    if (error && error.code !== '23505') console.error(error); 
+  });
+
+  DOM.modalInput.value = '';
+  closeModal();
 });
 
 DOM.modalInput.addEventListener('keydown', e => {
