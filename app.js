@@ -473,34 +473,37 @@ function handleTaskComplete(e, li, id) {
     li.style.pointerEvents = 'none';
     li.style.overflow = 'hidden';
     
-    updateZebraStripes(DOM.taskList);
-    
+    // Measure height FIRST before toggling zebra stripes to avoid thrashing
     const h = li.offsetHeight;
     li.style.height = h + 'px';
-    li.style.transition = 'none';
-    li.offsetHeight;
+    
+    updateZebraStripes(DOM.taskList);
     
     setTimeout(() => {
       DOM.completedBtn.classList.remove('header-icon-btn--flash');
-      DOM.completedBtn.offsetHeight;
-      DOM.completedBtn.classList.add('header-icon-btn--flash');
-      DOM.completedBtn.addEventListener('animationend', () => {
-        DOM.completedBtn.classList.remove('header-icon-btn--flash');
-      }, { once: true });
+      requestAnimationFrame(() => {
+        DOM.completedBtn.classList.add('header-icon-btn--flash');
+        DOM.completedBtn.addEventListener('animationend', () => {
+          DOM.completedBtn.classList.remove('header-icon-btn--flash');
+        }, { once: true });
+      });
     }, 80);
     
-    li.style.transition = 'transform 0.35s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.3s ease-out, height 0.35s cubic-bezier(0.22, 1, 0.36, 1), margin-bottom 0.35s cubic-bezier(0.22, 1, 0.36, 1), padding 0.35s cubic-bezier(0.22, 1, 0.36, 1), border-width 0.3s ease-out, background 0.3s, border-color 0.3s';
-    
+    // Double-rAF batching: set transition in frame 1, animate in frame 2
     requestAnimationFrame(() => {
-      li.style.transform = 'translateX(-50%) scale(0.85)';
-      li.style.opacity = '0';
-      li.style.height = '0px';
-      li.style.marginBottom = '0px';
-      li.style.paddingTop = '0px';
-      li.style.paddingBottom = '0px';
-      li.style.borderWidth = '0px';
-      li.style.background = 'rgba(42, 156, 115, 0.5)';
-      li.style.borderColor = 'rgba(42, 156, 115, 0.5)';
+      li.style.transition = 'transform 0.25s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s ease-out, height 0.25s cubic-bezier(0.22, 1, 0.36, 1), margin-bottom 0.25s cubic-bezier(0.22, 1, 0.36, 1), padding 0.25s cubic-bezier(0.22, 1, 0.36, 1), border-width 0.2s ease-out, background 0.2s, border-color 0.2s';
+      
+      requestAnimationFrame(() => {
+        li.style.transform = 'translateX(-50%) scale(0.85)';
+        li.style.opacity = '0';
+        li.style.height = '0px';
+        li.style.marginBottom = '0px';
+        li.style.paddingTop = '0px';
+        li.style.paddingBottom = '0px';
+        li.style.borderWidth = '0px';
+        li.style.background = 'rgba(42, 156, 115, 0.5)';
+        li.style.borderColor = 'rgba(42, 156, 115, 0.5)';
+      });
     });
     
     li.addEventListener('transitionend', function handler(e) {
