@@ -286,15 +286,16 @@ document.addEventListener('touchstart', (e) => {
 }, { passive: false });
 
 document.addEventListener('touchend', (e) => {
+  // Completely bypass JS interference for interactive elements.
+  // This allows native rapid tapping (spamming checkboxes/buttons) 
+  // without artificially triggering programmatic clicks or blocking them.
+  if (e.target.closest('button, input, label, .header-icon-btn, .cb-hit')) {
+    return;
+  }
+
   const now = Date.now();
   if (now - lastTouchTime <= 300) {
-    e.preventDefault(); // Kill double-tap zoom everywhere
-    
-    // Manually trigger click for interactive elements since we prevented default
-    const isInteractive = e.target.closest('button, input, label, a, .header-icon-btn, .cb-hit');
-    if (isInteractive) {
-      isInteractive.click();
-    }
+    e.preventDefault(); // Kill double-tap zoom on background areas
   }
   lastTouchTime = now;
 }, { passive: false });
