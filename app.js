@@ -275,7 +275,25 @@ function flipAnimate(elements, oldTops) {
 
 
 // ══════════════════════════════════
-//  Rendering
+//  Strict iOS Zoom Prevention
+// ══════════════════════════════════
+let lastTouchTime = 0;
+document.addEventListener('touchstart', (e) => {
+  if (e.touches.length > 1) {
+    e.preventDefault(); // Kill pinch-to-zoom
+  }
+}, { passive: false });
+
+document.addEventListener('touchend', (e) => {
+  const now = Date.now();
+  if (now - lastTouchTime <= 300) {
+    e.preventDefault(); // Kill double-tap zoom
+  }
+  lastTouchTime = now;
+}, { passive: false });
+
+// ══════════════════════════════════
+//  DOM Elements
 // ══════════════════════════════════
 
 function createTaskElement(task, forCompletedPanel = false) {
