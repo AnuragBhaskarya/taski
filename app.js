@@ -571,38 +571,107 @@ function handleUntick(li, id) {
 
 
 // ══════════════════════════════════
-//  Celebrations
+// ══════════════════════════════════
+//  Celebrations (Global Optimized Canvas)
 // ══════════════════════════════════
 
+const confettiCanvas = document.createElement('canvas');
+const confettiCtx = confettiCanvas.getContext('2d', { alpha: true });
+let confettiParticles = [];
+let confettiAnimating = false;
+let lastTime = 0;
+
+function initConfettiCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  confettiCanvas.width = window.innerWidth * dpr;
+  confettiCanvas.height = window.innerHeight * dpr;
+  confettiCanvas.style.width = window.innerWidth + 'px';
+  confettiCanvas.style.height = window.innerHeight + 'px';
+  confettiCanvas.style.position = 'fixed';
+  confettiCanvas.style.top = '0';
+  confettiCanvas.style.left = '0';
+  confettiCanvas.style.pointerEvents = 'none';
+  confettiCanvas.style.zIndex = '9999';
+  document.body.appendChild(confettiCanvas);
+  confettiCtx.scale(dpr, dpr);
+}
+
+window.addEventListener('resize', () => {
+  if (document.body.contains(confettiCanvas)) {
+    const dpr = window.devicePixelRatio || 1;
+    confettiCanvas.width = window.innerWidth * dpr;
+    confettiCanvas.height = window.innerHeight * dpr;
+    confettiCanvas.style.width = window.innerWidth + 'px';
+    confettiCanvas.style.height = window.innerHeight + 'px';
+    confettiCtx.scale(dpr, dpr);
+  }
+});
+
+function renderConfetti(time) {
+  if (confettiParticles.length === 0) {
+    confettiAnimating = false;
+    confettiCtx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+    return;
+  }
+  
+  const dt = Math.min((time - lastTime) / 1000, 0.05);
+  lastTime = time;
+  
+  confettiCtx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+  
+  const activeParticles = [];
+  
+  for (const p of confettiParticles) {
+    p.life += dt;
+    p.vy += p.g * dt;
+    p.vx *= p.dr;
+    p.vy *= p.dr;
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.rot += p.rs * dt;
+    
+    if (p.life > 1.5) p.op = Math.max(0, 1 - (p.life - 1.5) / 1.0);
+    
+    if (p.op > 0 && p.y < window.innerHeight + 50) {
+      activeParticles.push(p);
+      confettiCtx.save();
+      confettiCtx.translate(p.x, p.y);
+      confettiCtx.rotate(p.rot);
+      confettiCtx.globalAlpha = p.op;
+      confettiCtx.fillStyle = p.col;
+      
+      if (p.rect) {
+        confettiCtx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+      } else {
+        confettiCtx.beginPath();
+        confettiCtx.arc(0, 0, p.w / 2, 0, Math.PI * 2);
+        confettiCtx.fill();
+      }
+      confettiCtx.restore();
+    }
+  }
+  
+  confettiParticles = activeParticles;
+  if (confettiParticles.length > 0) {
+    requestAnimationFrame(renderConfetti);
+  } else {
+    confettiAnimating = false;
+    confettiCtx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+  }
+}
+
 function spawnConfetti(label, cb) {
+  if (!document.body.contains(confettiCanvas)) initConfettiCanvas();
+
   const r = cb.getBoundingClientRect();
   const ox = r.left + r.width / 2, oy = r.top + r.height / 2;
-  
-  const canvas = document.createElement('canvas');
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = window.innerWidth * dpr;
-  canvas.height = window.innerHeight * dpr;
-  canvas.style.width = window.innerWidth + 'px';
-  canvas.style.height = window.innerHeight + 'px';
-  canvas.style.position = 'fixed';
-  canvas.style.top = '0';
-  canvas.style.left = '0';
-  canvas.style.pointerEvents = 'none';
-  canvas.style.zIndex = '9999';
-  document.body.appendChild(canvas);
-  
-  const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
-
   const cols = ['#2a9c73','#34d399','#10b981','#059669','#6ee7b7','#a7f3d0','#d1fae5','#065f46'];
-  const ps = [];
   
-  // Create 40 particles for a beautiful burst
   for (let i = 0; i < 40; i++) {
     const sz = 6 + Math.random() * 8, rect = Math.random() > 0.5;
     const a = -Math.PI / 2 + (Math.random() - 0.5) * Math.PI * 1.2;
     const sp = 300 + Math.random() * 600;
-    ps.push({ 
+    confettiParticles.push({ 
       x: ox, y: oy,
       w: sz, h: rect ? sz * (0.5 + Math.random() * 0.5) : sz,
       rect,
@@ -618,51 +687,11 @@ function spawnConfetti(label, cb) {
     });
   }
   
-  let st = performance.now(); 
-  const ml = 2.5;
-  
-  function tick(now) {
-    const dt = Math.min((now - st) / 1000, 0.05); 
-    st = now; 
-    let done = true;
-    
-    ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
-    
-    for (const p of ps) {
-      if (p.op <= 0) continue; 
-      done = false;
-      p.life += dt; 
-      p.vy += p.g * dt; 
-      p.vx *= p.dr; 
-      p.vy *= p.dr;
-      p.x += p.vx * dt; 
-      p.y += p.vy * dt; 
-      p.rot += p.rs * dt;
-      if (p.life > ml * 0.6) p.op = Math.max(0, 1 - (p.life - ml * 0.6) / (ml * 0.4));
-      
-      ctx.save();
-      ctx.translate(p.x, p.y);
-      ctx.rotate(p.rot);
-      ctx.globalAlpha = p.op;
-      ctx.fillStyle = p.col;
-      
-      if (p.rect) {
-        ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
-      } else {
-        ctx.beginPath();
-        ctx.arc(0, 0, p.w / 2, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.restore();
-    }
-    
-    if (!done && ps[0].life < ml) {
-      requestAnimationFrame(tick);
-    } else {
-      canvas.remove();
-    }
+  if (!confettiAnimating) {
+    confettiAnimating = true;
+    lastTime = performance.now();
+    requestAnimationFrame(renderConfetti);
   }
-  requestAnimationFrame(tick);
 }
 
 function spawnFlash(li) {
