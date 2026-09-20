@@ -418,6 +418,7 @@ let completedScrim = null;
 function openCompletedPanel() {
   renderCompletedTasks();
   DOM.completedPanel.classList.remove('hidden');
+  document.body.style.overflow = 'hidden'; // lock background scrolling
 
   // Create scrim
   if (!completedScrim) {
@@ -433,6 +434,7 @@ function openCompletedPanel() {
 
 function closeCompletedPanel() {
   DOM.completedPanel.classList.add('hidden');
+  document.body.style.overflow = ''; // unlock background scrolling
   if (completedScrim) completedScrim.classList.add('hidden');
 }
 
