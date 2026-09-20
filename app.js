@@ -288,10 +288,12 @@ document.addEventListener('touchstart', (e) => {
 document.addEventListener('touchend', (e) => {
   const now = Date.now();
   if (now - lastTouchTime <= 300) {
-    // Allow rapid tapping on interactive elements (checkboxes, buttons)
+    e.preventDefault(); // Kill double-tap zoom everywhere
+    
+    // Manually trigger click for interactive elements since we prevented default
     const isInteractive = e.target.closest('button, input, label, a, .header-icon-btn, .cb-hit');
-    if (!isInteractive) {
-      e.preventDefault(); // Kill double-tap zoom on background/text
+    if (isInteractive) {
+      isInteractive.click();
     }
   }
   lastTouchTime = now;
