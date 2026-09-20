@@ -164,8 +164,6 @@ main {
   display: grid;
   place-items: center;
   transition: transform var(--anim-fast) ease;
-  user-select: none;
-  -webkit-user-select: none;
   -webkit-touch-callout: none;
 }
 
