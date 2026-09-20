@@ -454,7 +454,25 @@ main {
   100% { transform: translate(-50%, -50%) scale(2.5); opacity: 0; }
 }
 
-/* ── Confetti ── */
+/* ── CSS Confetti Particles (GPU compositor-only) ── */
+.css-particle {
+  position: fixed;
+  pointer-events: none;
+  z-index: 9999;
+  will-change: transform, opacity;
+  animation: css-confetti-burst ease-out forwards;
+}
+
+@keyframes css-confetti-burst {
+  0% {
+    transform: translate(-50%, -50%) scale(1) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(calc(-50% + var(--tx)), calc(-50% + var(--ty))) scale(0) rotate(var(--rot));
+    opacity: 0;
+  }
+}
 
 /* ── Completed Tasks Panel ── */
 .completed-panel {

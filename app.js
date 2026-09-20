@@ -571,128 +571,43 @@ function handleUntick(li, id) {
 
 
 // ══════════════════════════════════
+//  Celebrations (Pure CSS — Zero JS per frame)
 // ══════════════════════════════════
-//  Celebrations (Global Optimized Canvas)
-// ══════════════════════════════════
 
-const confettiCanvas = document.createElement('canvas');
-const confettiCtx = confettiCanvas.getContext('2d', { alpha: true });
-let confettiParticles = [];
-let confettiAnimating = false;
-let lastTime = 0;
-
-function initConfettiCanvas() {
-  const dpr = window.devicePixelRatio || 1;
-  confettiCanvas.width = window.innerWidth * dpr;
-  confettiCanvas.height = window.innerHeight * dpr;
-  confettiCanvas.style.width = window.innerWidth + 'px';
-  confettiCanvas.style.height = window.innerHeight + 'px';
-  confettiCanvas.style.position = 'fixed';
-  confettiCanvas.style.top = '0';
-  confettiCanvas.style.left = '0';
-  confettiCanvas.style.pointerEvents = 'none';
-  confettiCanvas.style.zIndex = '9999';
-  document.body.appendChild(confettiCanvas);
-  confettiCtx.scale(dpr, dpr);
-}
-
-window.addEventListener('resize', () => {
-  if (document.body.contains(confettiCanvas)) {
-    const dpr = window.devicePixelRatio || 1;
-    confettiCanvas.width = window.innerWidth * dpr;
-    confettiCanvas.height = window.innerHeight * dpr;
-    confettiCanvas.style.width = window.innerWidth + 'px';
-    confettiCanvas.style.height = window.innerHeight + 'px';
-    confettiCtx.scale(dpr, dpr);
-  }
-});
-
-function renderConfetti(time) {
-  if (confettiParticles.length === 0) {
-    confettiAnimating = false;
-    confettiCtx.clearRect(0, 0, window.innerWidth, window.innerHeight);
-    return;
-  }
-  
-  const dt = Math.min((time - lastTime) / 1000, 0.05);
-  lastTime = time;
-  
-  confettiCtx.clearRect(0, 0, window.innerWidth, window.innerHeight);
-  
-  const activeParticles = [];
-  
-  for (const p of confettiParticles) {
-    p.life += dt;
-    p.vy += p.g * dt;
-    p.vx *= p.dr;
-    p.vy *= p.dr;
-    p.x += p.vx * dt;
-    p.y += p.vy * dt;
-    p.rot += p.rs * dt;
-    
-    if (p.life > 1.5) p.op = Math.max(0, 1 - (p.life - 1.5) / 1.0);
-    
-    if (p.op > 0 && p.y < window.innerHeight + 50) {
-      activeParticles.push(p);
-      confettiCtx.save();
-      confettiCtx.translate(p.x, p.y);
-      confettiCtx.rotate(p.rot);
-      confettiCtx.globalAlpha = p.op;
-      confettiCtx.fillStyle = p.col;
-      
-      if (p.rect) {
-        confettiCtx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
-      } else {
-        confettiCtx.beginPath();
-        confettiCtx.arc(0, 0, p.w / 2, 0, Math.PI * 2);
-        confettiCtx.fill();
-      }
-      confettiCtx.restore();
-    }
-  }
-  
-  confettiParticles = activeParticles;
-  if (confettiParticles.length > 0) {
-    requestAnimationFrame(renderConfetti);
-  } else {
-    confettiAnimating = false;
-    confettiCtx.clearRect(0, 0, window.innerWidth, window.innerHeight);
-  }
-}
+const CONFETTI_COLORS = ['#2a9c73','#34d399','#10b981','#059669','#6ee7b7','#a7f3d0'];
+const PARTICLE_COUNT = 12;
 
 function spawnConfetti(label, cb) {
-  if (!document.body.contains(confettiCanvas)) initConfettiCanvas();
-
   const r = cb.getBoundingClientRect();
-  const ox = r.left + r.width / 2, oy = r.top + r.height / 2;
-  const cols = ['#2a9c73','#34d399','#10b981','#059669','#6ee7b7','#a7f3d0','#d1fae5','#065f46'];
-  
-  for (let i = 0; i < 40; i++) {
-    const sz = 6 + Math.random() * 8, rect = Math.random() > 0.5;
-    const a = -Math.PI / 2 + (Math.random() - 0.5) * Math.PI * 1.2;
-    const sp = 300 + Math.random() * 600;
-    confettiParticles.push({ 
-      x: ox, y: oy,
-      w: sz, h: rect ? sz * (0.5 + Math.random() * 0.5) : sz,
-      rect,
-      col: cols[Math.floor(Math.random() * cols.length)],
-      vx: Math.cos(a) * sp * (0.6 + Math.random() * 0.4), 
-      vy: Math.sin(a) * sp * (0.6 + Math.random() * 0.4),
-      rot: Math.random() * Math.PI * 2, 
-      rs: (Math.random() - 0.5) * 15, 
-      g: 600 + Math.random() * 300,
-      dr: 0.96 + Math.random() * 0.03, 
-      op: 1, 
-      life: 0 
-    });
-  }
-  
-  if (!confettiAnimating) {
-    confettiAnimating = true;
-    lastTime = performance.now();
-    requestAnimationFrame(renderConfetti);
+  const ox = r.left + r.width / 2;
+  const oy = r.top + r.height / 2;
+
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    const el = document.createElement('div');
+    el.className = 'css-particle';
+
+    const angle = -Math.PI / 2 + (Math.random() - 0.5) * Math.PI * 1.4;
+    const dist = 60 + Math.random() * 100;
+    const tx = Math.cos(angle) * dist;
+    const ty = Math.sin(angle) * dist + 30; // gravity bias
+    const sz = 5 + Math.random() * 5;
+    const rot = (Math.random() - 0.5) * 720;
+    const dur = 0.5 + Math.random() * 0.3;
+
+    el.style.cssText = `
+      left:${ox}px;top:${oy}px;
+      width:${sz}px;height:${sz * (0.4 + Math.random() * 0.6)}px;
+      background:${CONFETTI_COLORS[Math.random() * CONFETTI_COLORS.length | 0]};
+      border-radius:${Math.random() > 0.5 ? '50%' : '1px'};
+      --tx:${tx}px;--ty:${ty}px;--rot:${rot}deg;
+      animation-duration:${dur}s;
+    `;
+
+    document.body.appendChild(el);
+    el.addEventListener('animationend', () => el.remove(), { once: true });
   }
 }
+
 
 function spawnFlash(li) {
   const f = document.createElement('div'); f.className='topic-item__flash';
