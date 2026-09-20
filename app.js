@@ -288,7 +288,11 @@ document.addEventListener('touchstart', (e) => {
 document.addEventListener('touchend', (e) => {
   const now = Date.now();
   if (now - lastTouchTime <= 300) {
-    e.preventDefault(); // Kill double-tap zoom
+    // Allow rapid tapping on interactive elements (checkboxes, buttons)
+    const isInteractive = e.target.closest('button, input, label, a, .header-icon-btn, .cb-hit');
+    if (!isInteractive) {
+      e.preventDefault(); // Kill double-tap zoom on background/text
+    }
   }
   lastTouchTime = now;
 }, { passive: false });
