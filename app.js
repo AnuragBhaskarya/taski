@@ -476,48 +476,55 @@ function handleTaskComplete(e, li, id) {
   spawnFlash(li);
   spawnRipple(li, cb);
 
-  // After 1s: slide left + shrink + green + fade out (driven by spring physics)
+  // After celebration: slide & collapse using compositor-only properties
   setTimeout(() => {
     li.classList.remove('topic-item--celebrate');
-
     li.style.pointerEvents = 'none';
     li.style.overflow = 'hidden';
     
-    // Trigger stripe update immediately so siblings fade colors during the animation
+    // Trigger stripe update so siblings recolor during animation
     updateZebraStripes(DOM.taskList);
     
-    const startHeight = li.offsetHeight;
-
-      // Flash the completed icon in header after 100ms artificial delay
-      setTimeout(() => {
+    // Capture siblings BEFORE we start collapsing (for FLIP)
+    const siblings = [...DOM.taskList.children].filter(c => c !== li && !c.classList.contains('topic-item--dismissing'));
+    const oldTops = captureRects(siblings);
+    
+    // Lock height to a fixed px value, then animate with CSS
+    const h = li.offsetHeight;
+    li.style.height = h + 'px';
+    li.style.transition = 'none';
+    li.offsetHeight; // force reflow once
+    
+    // Flash completed icon
+    setTimeout(() => {
+      DOM.completedBtn.classList.remove('header-icon-btn--flash');
+      DOM.completedBtn.offsetHeight;
+      DOM.completedBtn.classList.add('header-icon-btn--flash');
+      DOM.completedBtn.addEventListener('animationend', () => {
         DOM.completedBtn.classList.remove('header-icon-btn--flash');
-        DOM.completedBtn.offsetHeight; // Force reflow
-        DOM.completedBtn.classList.add('header-icon-btn--flash');
-        DOM.completedBtn.addEventListener('animationend', () => {
-          DOM.completedBtn.classList.remove('header-icon-btn--flash');
-        }, { once: true });
-      }, 100);
-
-    animateSpring(li, startHeight, 0, (y, el) => {
-      // y goes from startHeight to 0 with spring physics
-      const progress = y / startHeight; // 1 down to 0
-      
-      el.style.height = `${y}px`;
-      el.style.marginBottom = `${progress * 8}px`; // original margin is 8px
-      el.style.paddingTop = `${progress * 14}px`; // original padding is 14px
-      el.style.paddingBottom = `${progress * 14}px`; 
-      el.style.borderWidth = `${progress}px`; 
-      el.style.opacity = progress;
-      
-      const slide = (1 - progress) * -60; // 0 to -60%
-      el.style.transform = `translateX(${slide}%) scale(${progress})`;
-      
-      const alpha = 0.8 * (1 - progress);
-      el.style.background = `rgba(42, 156, 115, ${alpha})`;
-      el.style.borderColor = `rgba(42, 156, 115, ${alpha})`;
-      
-    }, (el) => {
-      el.remove();
+      }, { once: true });
+    }, 100);
+    
+    // Add dismissing class to trigger pure CSS collapse
+    li.classList.add('topic-item--dismissing');
+    li.style.transition = 'transform 0.45s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.45s cubic-bezier(0.4, 0, 0.2, 1), height 0.45s cubic-bezier(0.4, 0, 0.2, 1), margin 0.45s cubic-bezier(0.4, 0, 0.2, 1), padding 0.45s cubic-bezier(0.4, 0, 0.2, 1), border-width 0.45s cubic-bezier(0.4, 0, 0.2, 1)';
+    
+    requestAnimationFrame(() => {
+      li.style.transform = 'translateX(-60%) scale(0.8)';
+      li.style.opacity = '0';
+      li.style.height = '0px';
+      li.style.marginBottom = '0px';
+      li.style.paddingTop = '0px';
+      li.style.paddingBottom = '0px';
+      li.style.borderWidth = '0px';
+      li.style.background = 'rgba(42, 156, 115, 0.6)';
+      li.style.borderColor = 'rgba(42, 156, 115, 0.6)';
+    });
+    
+    li.addEventListener('transitionend', function handler(e) {
+      if (e.propertyName !== 'height') return;
+      li.removeEventListener('transitionend', handler);
+      li.remove();
     });
   }, 200);
 }
@@ -574,8 +581,8 @@ function handleUntick(li, id) {
 //  Celebrations (Pure CSS — Zero JS per frame)
 // ══════════════════════════════════
 
-const CONFETTI_COLORS = ['#2a9c73','#34d399','#10b981','#059669','#6ee7b7','#a7f3d0'];
-const PARTICLE_COUNT = 12;
+const CONFETTI_COLORS = ['#2a9c73','#34d399','#10b981','#059669','#6ee7b7','#a7f3d0','#d1fae5','#065f46'];
+const PARTICLE_COUNT = 24;
 
 function spawnConfetti(label, cb) {
   const r = cb.getBoundingClientRect();
@@ -586,20 +593,21 @@ function spawnConfetti(label, cb) {
     const el = document.createElement('div');
     el.className = 'css-particle';
 
-    const angle = -Math.PI / 2 + (Math.random() - 0.5) * Math.PI * 1.4;
-    const dist = 60 + Math.random() * 100;
+    const angle = -Math.PI / 2 + (Math.random() - 0.5) * Math.PI * 1.6;
+    const dist = 120 + Math.random() * 200;
     const tx = Math.cos(angle) * dist;
-    const ty = Math.sin(angle) * dist + 30; // gravity bias
-    const sz = 5 + Math.random() * 5;
-    const rot = (Math.random() - 0.5) * 720;
-    const dur = 0.5 + Math.random() * 0.3;
+    const ty = Math.sin(angle) * dist;
+    const peakY = -80 - Math.random() * 120; // how high it arcs
+    const sz = 6 + Math.random() * 8;
+    const rot = (Math.random() - 0.5) * 900;
+    const dur = 0.8 + Math.random() * 0.6;
 
     el.style.cssText = `
       left:${ox}px;top:${oy}px;
       width:${sz}px;height:${sz * (0.4 + Math.random() * 0.6)}px;
       background:${CONFETTI_COLORS[Math.random() * CONFETTI_COLORS.length | 0]};
-      border-radius:${Math.random() > 0.5 ? '50%' : '1px'};
-      --tx:${tx}px;--ty:${ty}px;--rot:${rot}deg;
+      border-radius:${Math.random() > 0.5 ? '50%' : '2px'};
+      --tx:${tx}px;--ty:${ty + 60}px;--peak-y:${peakY}px;--peak-x:${tx * 0.4}px;--rot:${rot}deg;
       animation-duration:${dur}s;
     `;
 
@@ -607,7 +615,6 @@ function spawnConfetti(label, cb) {
     el.addEventListener('animationend', () => el.remove(), { once: true });
   }
 }
-
 
 function spawnFlash(li) {
   const f = document.createElement('div'); f.className='topic-item__flash';
