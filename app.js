@@ -312,22 +312,13 @@ function createTaskElement(task, forCompletedPanel = false) {
 }
 
 function updateZebraStripes(listElement = DOM.taskList) {
-  const items = Array.from(listElement.querySelectorAll('.topic-item'));
-  items.forEach((item, index) => {
-    // Ignore dismissing items when calculating order
-    if (item.style.pointerEvents === 'none') return;
-    
-    // We need to calculate index ignoring dismissing items
-    const visibleIndex = items.filter(el => el.style.pointerEvents !== 'none').indexOf(item);
-    
-    if (visibleIndex % 2 === 0) {
-      item.classList.add('is-odd');
-      item.classList.remove('is-even');
-    } else {
-      item.classList.add('is-even');
-      item.classList.remove('is-odd');
-    }
-  });
+  let visibleIndex = 0;
+  for (const item of listElement.children) {
+    if (!item.classList.contains('topic-item') || item.style.pointerEvents === 'none') continue;
+    item.classList.toggle('is-odd', visibleIndex % 2 === 0);
+    item.classList.toggle('is-even', visibleIndex % 2 !== 0);
+    visibleIndex++;
+  }
 }
 
 function renderActiveTasks() {
@@ -581,7 +572,7 @@ function handleUntick(li, id) {
 // ══════════════════════════════════
 
 const CONFETTI_COLORS = ['#2a9c73','#34d399','#10b981','#059669','#6ee7b7','#a7f3d0','#d1fae5','#065f46'];
-const PARTICLE_COUNT = 24;
+const PARTICLE_COUNT = 16;
 
 function spawnConfetti(label, cb) {
   const r = cb.getBoundingClientRect();
