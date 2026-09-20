@@ -170,8 +170,9 @@ function escapeHtml(s) {
 //  type:"spring", stiffness:350, damping:30
 // ══════════════════════════════════════════════════
 
-const STIFFNESS = 350;
-const DAMPING = 30;
+// Spring animation constants for drag-and-drop shifting
+const STIFFNESS = 180;
+const DAMPING = 28;
 const REST_DELTA = 0.5;
 const REST_VELOCITY = 0.5;
 
