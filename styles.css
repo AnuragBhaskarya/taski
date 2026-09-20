@@ -41,7 +41,7 @@
 }
 
 html, body {
-  min-height: 100dvh;
+  height: 100dvh;
   margin: 0;
   padding: 0;
   background: var(--wht);
@@ -52,34 +52,38 @@ html, body {
   transition: background-color 0.4s ease, color 0.4s ease;
   touch-action: pan-x pan-y;
   -ms-touch-action: pan-x pan-y;
+  overflow: hidden;
 }
 
 body {
-  overflow-x: hidden;
-}
-
-body::-webkit-scrollbar, html::-webkit-scrollbar {
-  -webkit-appearance: none;
-  width: 6px;
-  height: 6px;
-}
-body::-webkit-scrollbar-thumb, html::-webkit-scrollbar-thumb {
-  background: var(--line);
-  border-radius: 3px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 main {
   flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
   padding: 20px;
   max-width: 600px;
   margin: 0 auto;
   width: 100%;
 }
 
+main::-webkit-scrollbar {
+  -webkit-appearance: none;
+  width: 6px;
+}
+main::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 3px;
+}
+
 /* ── App Header ── */
 .app-header {
-  position: sticky;
-  top: 0;
+  flex-shrink: 0;
   z-index: 5;
   background: var(--bar);
   border-bottom: 1px solid var(--line);

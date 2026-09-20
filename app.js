@@ -7,6 +7,7 @@ const DOM = {
   themeIconMoon: document.getElementById('themeIconMoon'),
   themeIconSun: document.getElementById('themeIconSun'),
   taskList: document.getElementById('taskList'),
+  main: document.querySelector('main'),
   fabContainer: document.getElementById('fabContainer'),
   fabAdd: document.getElementById('fabAdd'),
   addModal: document.getElementById('addModal'),
@@ -447,14 +448,8 @@ function openCompletedPanel() {
   renderCompletedTasks();
   DOM.completedPanel.classList.remove('hidden');
 
-  // Lock background scroll — position:fixed is the only reliable
-  // method on iOS to fully prevent touch-through scrolling.
-  const scrollY = window.scrollY;
-  document.body.style.position = 'fixed';
-  document.body.style.top = `-${scrollY}px`;
-  document.body.style.left = '0';
-  document.body.style.right = '0';
-  document.body.dataset.scrollLock = scrollY;
+  // Lock task list scroll while panel is open
+  DOM.main.style.overflow = 'hidden';
 
   // Create scrim
   if (!completedScrim) {
@@ -470,16 +465,7 @@ function openCompletedPanel() {
 
 function closeCompletedPanel() {
   DOM.completedPanel.classList.add('hidden');
-
-  // Unlock background scroll and restore position
-  const scrollY = parseInt(document.body.dataset.scrollLock || '0', 10);
-  document.body.style.position = '';
-  document.body.style.top = '';
-  document.body.style.left = '';
-  document.body.style.right = '';
-  delete document.body.dataset.scrollLock;
-  window.scrollTo(0, scrollY);
-
+  DOM.main.style.overflow = '';
   if (completedScrim) completedScrim.classList.add('hidden');
 }
 
@@ -815,11 +801,11 @@ function autoScrollLoop() {
   if (drag.clientY < topEdge) { 
     // Scroll faster the closer they get to the edge
     const speed = Math.max(5, (topEdge - drag.clientY) * 0.3);
-    window.scrollBy(0, -speed); 
+    DOM.main.scrollBy(0, -speed); 
     scrolled = true; 
   } else if (drag.clientY > bottomEdge) { 
     const speed = Math.max(5, (drag.clientY - bottomEdge) * 0.3);
-    window.scrollBy(0, speed); 
+    DOM.main.scrollBy(0, speed); 
     scrolled = true; 
   }
   
