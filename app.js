@@ -583,21 +583,20 @@ function spawnConfetti(label, cb) {
     const el = document.createElement('div');
     el.className = 'css-particle';
 
-    const angle = -Math.PI / 2 + (Math.random() - 0.5) * Math.PI * 1.6;
-    const dist = 120 + Math.random() * 200;
+    const angle = Math.random() * Math.PI * 2; // full 360 degree outward splash
+    const dist = 40 + Math.random() * 80;
     const tx = Math.cos(angle) * dist;
     const ty = Math.sin(angle) * dist;
-    const peakY = -30 - Math.random() * 50; // subtle arc, not too high
     const sz = 6 + Math.random() * 8;
-    const rot = (Math.random() - 0.5) * 900;
-    const dur = 0.7 + Math.random() * 0.5;
+    const rot = (Math.random() - 0.5) * 720;
+    const dur = 0.5 + Math.random() * 0.3;
 
     el.style.cssText = `
       left:${ox}px;top:${oy}px;
       width:${sz}px;height:${sz * (0.4 + Math.random() * 0.6)}px;
       background:${CONFETTI_COLORS[Math.random() * CONFETTI_COLORS.length | 0]};
       border-radius:${Math.random() > 0.5 ? '50%' : '2px'};
-      --tx:${tx}px;--ty:${ty + 60}px;--peak-y:${peakY}px;--peak-x:${tx * 0.4}px;--rot:${rot}deg;
+      --tx:${tx}px;--ty:${ty}px;--rot:${rot}deg;
       animation-duration:${dur}s;
     `;
 
