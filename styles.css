@@ -281,7 +281,7 @@ main {
   background: var(--bg-row-even);
   border: 1px solid var(--line);
   box-shadow: var(--shadow);
-  transition: opacity var(--anim-fast) ease, box-shadow var(--anim-fast) ease, background-color 0.5s ease;
+  transition: opacity var(--anim-fast) ease, box-shadow var(--anim-fast) ease, background-color 0.4s ease, transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
   cursor: grab;
   touch-action: pan-y;
   overflow: hidden;

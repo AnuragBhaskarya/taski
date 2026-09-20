@@ -476,7 +476,7 @@ function handleTaskComplete(e, li, id) {
   spawnFlash(li);
   spawnRipple(li, cb);
 
-  // After celebration: slide & collapse using CSS transitions
+  // After celebration: slide & collapse
   setTimeout(() => {
     li.classList.remove('topic-item--celebrate');
     li.style.pointerEvents = 'none';
@@ -487,7 +487,7 @@ function handleTaskComplete(e, li, id) {
     const h = li.offsetHeight;
     li.style.height = h + 'px';
     li.style.transition = 'none';
-    li.offsetHeight; // single reflow
+    li.offsetHeight;
     
     setTimeout(() => {
       DOM.completedBtn.classList.remove('header-icon-btn--flash');
@@ -496,20 +496,20 @@ function handleTaskComplete(e, li, id) {
       DOM.completedBtn.addEventListener('animationend', () => {
         DOM.completedBtn.classList.remove('header-icon-btn--flash');
       }, { once: true });
-    }, 100);
+    }, 80);
     
-    li.style.transition = 'transform 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.4s cubic-bezier(0.4, 0, 0.2, 1), height 0.4s cubic-bezier(0.4, 0, 0.2, 1), margin-bottom 0.4s cubic-bezier(0.4, 0, 0.2, 1), padding 0.4s cubic-bezier(0.4, 0, 0.2, 1), border-width 0.4s cubic-bezier(0.4, 0, 0.2, 1), background 0.4s, border-color 0.4s';
+    li.style.transition = 'transform 0.35s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.3s ease-out, height 0.35s cubic-bezier(0.22, 1, 0.36, 1), margin-bottom 0.35s cubic-bezier(0.22, 1, 0.36, 1), padding 0.35s cubic-bezier(0.22, 1, 0.36, 1), border-width 0.3s ease-out, background 0.3s, border-color 0.3s';
     
     requestAnimationFrame(() => {
-      li.style.transform = 'translateX(-60%) scale(0.8)';
+      li.style.transform = 'translateX(-50%) scale(0.85)';
       li.style.opacity = '0';
       li.style.height = '0px';
       li.style.marginBottom = '0px';
       li.style.paddingTop = '0px';
       li.style.paddingBottom = '0px';
       li.style.borderWidth = '0px';
-      li.style.background = 'rgba(42, 156, 115, 0.6)';
-      li.style.borderColor = 'rgba(42, 156, 115, 0.6)';
+      li.style.background = 'rgba(42, 156, 115, 0.5)';
+      li.style.borderColor = 'rgba(42, 156, 115, 0.5)';
     });
     
     li.addEventListener('transitionend', function handler(e) {
@@ -518,7 +518,7 @@ function handleTaskComplete(e, li, id) {
       li.remove();
       renderCompletedTasks();
     });
-  }, 200);
+  }, 80);
 }
 
 
@@ -528,35 +528,37 @@ function handleTaskComplete(e, li, id) {
 
 function handleUntick(li, id) {
   const task = tasks.find(t => t.id === id);
-  if (task) {
-    task.completed = false;
-    task.completedAt = null;
-    const activeTasks = tasks.filter(t => !t.completed);
-    task.position = activeTasks.length > 0 ? activeTasks[activeTasks.length - 1].position + 1000 : 1000;
-    task._lastMutatedAt = Date.now();
-    saveTasks();
-    db.from('tasks').update({ completed: false, completedAt: null, position: task.position }).eq('id', task.id).then();
-  }
-
-  // Animate out with pure CSS transitions
-  li.style.pointerEvents = 'none';
-  li.style.overflow = 'hidden';
+  if (!task) return;
   
+  // Immediately disable to prevent double-tap
+  li.style.pointerEvents = 'none';
+  
+  task.completed = false;
+  task.completedAt = null;
+  const activeTasks = tasks.filter(t => !t.completed);
+  task.position = activeTasks.length > 0 ? activeTasks[activeTasks.length - 1].position + 1000 : 1000;
+  task._lastMutatedAt = Date.now();
+  saveTasks();
+  db.from('tasks').update({ completed: false, completedAt: null, position: task.position }).eq('id', task.id).then();
+
+  // Immediate CSS collapse — no forced reflow needed if we use rAF
+  li.style.overflow = 'hidden';
   const h = li.offsetHeight;
   li.style.height = h + 'px';
-  li.style.transition = 'none';
-  li.offsetHeight; // single reflow
   
-  li.style.transition = 'transform 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1), height 0.35s cubic-bezier(0.4, 0, 0.2, 1), margin-bottom 0.35s cubic-bezier(0.4, 0, 0.2, 1), padding 0.35s cubic-bezier(0.4, 0, 0.2, 1), border-width 0.35s cubic-bezier(0.4, 0, 0.2, 1)';
-  
+  // Use double-rAF to batch: set height in frame 1, animate in frame 2
   requestAnimationFrame(() => {
-    li.style.transform = 'translateX(60%) scale(0.8)';
-    li.style.opacity = '0';
-    li.style.height = '0px';
-    li.style.marginBottom = '0px';
-    li.style.paddingTop = '0px';
-    li.style.paddingBottom = '0px';
-    li.style.borderWidth = '0px';
+    li.style.transition = 'transform 0.25s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s ease-out, height 0.25s cubic-bezier(0.22, 1, 0.36, 1), margin-bottom 0.25s cubic-bezier(0.22, 1, 0.36, 1), padding 0.25s cubic-bezier(0.22, 1, 0.36, 1), border-width 0.2s ease-out';
+    
+    requestAnimationFrame(() => {
+      li.style.transform = 'translateX(50%) scale(0.85)';
+      li.style.opacity = '0';
+      li.style.height = '0px';
+      li.style.marginBottom = '0px';
+      li.style.paddingTop = '0px';
+      li.style.paddingBottom = '0px';
+      li.style.borderWidth = '0px';
+    });
   });
   
   li.addEventListener('transitionend', function handler(e) {
@@ -565,7 +567,7 @@ function handleUntick(li, id) {
     li.remove();
     DOM.completedEmpty.style.display = DOM.completedList.children.length ? 'none' : 'block';
 
-    // Add back to main list with animation
+    // Add back to main list
     const newEl = createTaskElement(task);
     newEl.classList.add('card--animate-in');
     DOM.taskList.appendChild(newEl);
