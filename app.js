@@ -28,34 +28,6 @@ if (tasks.length > 0) {
   renderCompletedTasks();
 }
 
-let pendingMutations = 0;
-let pendingLoad = false;
-let mutationCooldown = 0;
-const COOLDOWN_MS = 600;
-
-async function executeMutation(promise) {
-  pendingMutations++;
-  mutationCooldown = Date.now() + COOLDOWN_MS;
-  try {
-    return await promise;
-  } catch (e) {
-    console.error('Mutation error:', e);
-  } finally {
-    pendingMutations--;
-    mutationCooldown = Date.now() + COOLDOWN_MS;
-    
-    // Check if we need to load after the cooldown expires
-    setTimeout(() => {
-      if (pendingMutations === 0 && pendingLoad && !document.body.classList.contains('is-dragging')) {
-        if (Date.now() >= mutationCooldown - 50) { // small buffer
-          pendingLoad = false;
-          loadTasks();
-        }
-      }
-    }, COOLDOWN_MS + 50);
-  }
-}
-
 async function initApp() {
   try {
     const res = await fetch('/api/env');
@@ -67,11 +39,37 @@ async function initApp() {
     db
       .channel('tasks')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, payload => {
-        if (document.body.classList.contains('is-dragging') || pendingMutations > 0 || Date.now() < mutationCooldown) {
-          pendingLoad = true;
-          return;
+        if (payload.eventType === 'INSERT') {
+          if (!tasks.find(t => t.id === payload.new.id)) {
+            tasks.push({ ...payload.new, _lastMutatedAt: 0 });
+            saveTasks();
+            renderActiveTasks();
+            renderCompletedTasks();
+          }
+        } else if (payload.eventType === 'UPDATE') {
+          const localTask = tasks.find(t => t.id === payload.new.id);
+          if (localTask) {
+            if (Date.now() - (localTask._lastMutatedAt || 0) < 2000) return;
+            Object.assign(localTask, {
+              title: payload.new.text,
+              completed: payload.new.completed,
+              completedAt: payload.new.completedAt,
+              position: payload.new.position
+            });
+            saveTasks();
+            renderActiveTasks();
+            renderCompletedTasks();
+          }
+        } else if (payload.eventType === 'DELETE') {
+          const localTask = tasks.find(t => t.id === payload.old.id);
+          if (localTask) {
+            if (Date.now() - (localTask._lastMutatedAt || 0) < 2000) return;
+            tasks = tasks.filter(t => t.id !== payload.old.id);
+            saveTasks();
+            renderActiveTasks();
+            renderCompletedTasks();
+          }
         }
-        loadTasks();
       })
       .subscribe();
 
@@ -364,7 +362,8 @@ DOM.modalConfirm.addEventListener('click', () => {
     title,
     completed: false,
     completedAt: null,
-    position: pos
+    position: pos,
+    _lastMutatedAt: Date.now()
   };
 
   tasks.push(newTask);
@@ -377,7 +376,7 @@ DOM.modalConfirm.addEventListener('click', () => {
 
   DOM.modalConfirm.disabled = true;
   
-  executeMutation(db.from('tasks').insert([{
+  db.from('tasks').insert([{
     id: newTask.id,
     text: newTask.title,
     completed: newTask.completed,
@@ -386,7 +385,7 @@ DOM.modalConfirm.addEventListener('click', () => {
   }]).then(({error}) => { 
     DOM.modalConfirm.disabled = false;
     if (error && error.code !== '23505') console.error(error); 
-  }));
+  });
 
   DOM.modalInput.value = '';
   closeModal();
@@ -442,8 +441,9 @@ function handleTaskComplete(e, li, id) {
   if (task) {
     task.completed = true;
     task.completedAt = Date.now();
+    task._lastMutatedAt = Date.now();
     saveTasks(); // instant cache
-    executeMutation(db.from('tasks').update({ completed: true, completedAt: task.completedAt }).eq('id', task.id));
+    db.from('tasks').update({ completed: true, completedAt: task.completedAt }).eq('id', task.id).then();
   }
 
   li.classList.add('topic-item--complete', 'topic-item--celebrate');
@@ -513,8 +513,9 @@ function handleUntick(li, id) {
     task.completedAt = null;
     const activeTasks = tasks.filter(t => !t.completed);
     task.position = activeTasks.length > 0 ? activeTasks[activeTasks.length - 1].position + 1000 : 1000;
+    task._lastMutatedAt = Date.now();
     saveTasks(); // instant cache
-    executeMutation(db.from('tasks').update({ completed: false, completedAt: null, position: task.position }).eq('id', task.id));
+    db.from('tasks').update({ completed: false, completedAt: null, position: task.position }).eq('id', task.id).then();
   }
 
   // Animate out of completed panel (driven by spring physics)
@@ -894,9 +895,11 @@ function onPointerUp(e) {
     }, (el) => {
       el.remove();
       item.remove();
+      const task = tasks.find(t => t.id === item.dataset.id);
+      if (task) task._lastMutatedAt = Date.now();
       tasks = tasks.filter(t => t.id !== item.dataset.id);
       saveTasks(); // instant cache
-      executeMutation(db.from('tasks').delete().eq('id', item.dataset.id));
+      db.from('tasks').delete().eq('id', item.dataset.id).then();
       updateZebraStripes(DOM.taskList);
     });
     
@@ -944,6 +947,7 @@ function onPointerUp(e) {
       newPos = (prevTask.position + nextTask.position) / 2;
     }
     droppedTask.position = newPos;
+    droppedTask._lastMutatedAt = Date.now();
 
     tasks.sort((a, b) => {
       if (a.completed !== b.completed) return a.completed ? 1 : -1;
@@ -952,23 +956,9 @@ function onPointerUp(e) {
     });
 
     saveTasks(); // instant cache
-    executeMutation(db.from('tasks').update({ position: newPos }).eq('id', droppedTask.id));
+    db.from('tasks').update({ position: newPos }).eq('id', droppedTask.id).then();
     updateZebraStripes(DOM.taskList);
     drag = null;
-
-    if (pendingMutations === 0 && pendingLoad && !document.body.classList.contains('is-dragging')) {
-      if (Date.now() >= mutationCooldown - 50) {
-        pendingLoad = false;
-        loadTasks();
-      } else {
-        setTimeout(() => {
-          if (pendingMutations === 0 && pendingLoad && !document.body.classList.contains('is-dragging') && Date.now() >= mutationCooldown - 50) {
-            pendingLoad = false;
-            loadTasks();
-          }
-        }, mutationCooldown - Date.now() + 50);
-      }
-    }
   }
 
   item.addEventListener('transitionend', settle, { once: true });
