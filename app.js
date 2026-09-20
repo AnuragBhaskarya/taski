@@ -446,7 +446,15 @@ let completedScrim = null;
 function openCompletedPanel() {
   renderCompletedTasks();
   DOM.completedPanel.classList.remove('hidden');
-  document.body.style.overflow = 'hidden'; // lock background scrolling
+
+  // Lock background scroll — position:fixed is the only reliable
+  // method on iOS to fully prevent touch-through scrolling.
+  const scrollY = window.scrollY;
+  document.body.style.position = 'fixed';
+  document.body.style.top = `-${scrollY}px`;
+  document.body.style.left = '0';
+  document.body.style.right = '0';
+  document.body.dataset.scrollLock = scrollY;
 
   // Create scrim
   if (!completedScrim) {
@@ -462,7 +470,16 @@ function openCompletedPanel() {
 
 function closeCompletedPanel() {
   DOM.completedPanel.classList.add('hidden');
-  document.body.style.overflow = ''; // unlock background scrolling
+
+  // Unlock background scroll and restore position
+  const scrollY = parseInt(document.body.dataset.scrollLock || '0', 10);
+  document.body.style.position = '';
+  document.body.style.top = '';
+  document.body.style.left = '';
+  document.body.style.right = '';
+  delete document.body.dataset.scrollLock;
+  window.scrollTo(0, scrollY);
+
   if (completedScrim) completedScrim.classList.add('hidden');
 }
 
