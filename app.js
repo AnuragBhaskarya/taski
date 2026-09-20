@@ -363,12 +363,18 @@ function renderCompletedTasks() {
 
 
 // ── Modal logic ──
-DOM.fabAdd.addEventListener('click', () => {
+function openAddModal(e) {
+  if (e && e.type === 'touchend') {
+    e.preventDefault(); // prevents duplicate click event
+  }
   DOM.addModal.classList.remove('hidden');
   document.body.style.overflow = 'hidden';
   DOM.modalInput.value = '';
   DOM.modalInput.focus();
-});
+}
+
+DOM.fabAdd.addEventListener('click', openAddModal);
+DOM.fabAdd.addEventListener('touchend', openAddModal);
 
 function closeModal() {
   DOM.addModal.classList.add('hidden');
