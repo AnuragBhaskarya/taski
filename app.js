@@ -28,6 +28,33 @@ if (tasks.length > 0) {
   renderCompletedTasks();
 }
 
+let renderBatchTimer = null;
+let pendingRemoteRender = false;
+
+function scheduleRender() {
+  if (renderBatchTimer) return;
+  
+  if (document.body.classList.contains('is-dragging')) {
+    pendingRemoteRender = true;
+    return;
+  }
+  
+  renderBatchTimer = requestAnimationFrame(() => {
+    renderBatchTimer = null;
+    pendingRemoteRender = false;
+    
+    tasks.sort((a, b) => {
+      if (a.completed !== b.completed) return a.completed ? 1 : -1;
+      if (a.completed) return (b.completedAt || 0) - (a.completedAt || 0);
+      return a.position - b.position;
+    });
+    
+    saveTasks();
+    renderActiveTasks();
+    renderCompletedTasks();
+  });
+}
+
 async function initApp() {
   try {
     const res = await fetch('/api/env');
@@ -42,9 +69,7 @@ async function initApp() {
         if (payload.eventType === 'INSERT') {
           if (!tasks.find(t => t.id === payload.new.id)) {
             tasks.push({ ...payload.new, _lastMutatedAt: 0 });
-            saveTasks();
-            renderActiveTasks();
-            renderCompletedTasks();
+            scheduleRender();
           }
         } else if (payload.eventType === 'UPDATE') {
           const localTask = tasks.find(t => t.id === payload.new.id);
@@ -56,18 +81,14 @@ async function initApp() {
               completedAt: payload.new.completedAt,
               position: payload.new.position
             });
-            saveTasks();
-            renderActiveTasks();
-            renderCompletedTasks();
+            scheduleRender();
           }
         } else if (payload.eventType === 'DELETE') {
           const localTask = tasks.find(t => t.id === payload.old.id);
           if (localTask) {
             if (Date.now() - (localTask._lastMutatedAt || 0) < 2000) return;
             tasks = tasks.filter(t => t.id !== payload.old.id);
-            saveTasks();
-            renderActiveTasks();
-            renderCompletedTasks();
+            scheduleRender();
           }
         }
       })
@@ -959,6 +980,10 @@ function onPointerUp(e) {
     db.from('tasks').update({ position: newPos }).eq('id', droppedTask.id).then();
     updateZebraStripes(DOM.taskList);
     drag = null;
+    
+    if (pendingRemoteRender) {
+      scheduleRender();
+    }
   }
 
   item.addEventListener('transitionend', settle, { once: true });
