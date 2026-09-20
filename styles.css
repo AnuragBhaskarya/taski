@@ -490,6 +490,7 @@ main {
   flex-direction: column;
   transform: translateX(0);
   transition: transform 0.35s cubic-bezier(0.22,1,0.36,1), opacity 0.25s ease;
+  overscroll-behavior: none;
 }
 
 .completed-panel.hidden {
@@ -554,6 +555,8 @@ main {
   background: rgba(0,0,0,0.35);
   z-index: 499;
   transition: opacity 0.3s ease;
+  touch-action: none;
+  overscroll-behavior: none;
 }
 .completed-scrim.hidden {
   opacity: 0;
