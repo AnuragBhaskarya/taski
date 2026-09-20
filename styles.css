@@ -537,7 +537,7 @@ main {
 
 .completed-task-list .topic-item {
   cursor: default;
-  touch-action: auto;
+  touch-action: pan-y;
 }
 
 .completed-empty {
