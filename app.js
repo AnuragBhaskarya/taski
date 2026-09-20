@@ -476,26 +476,19 @@ function handleTaskComplete(e, li, id) {
   spawnFlash(li);
   spawnRipple(li, cb);
 
-  // After celebration: slide & collapse using compositor-only properties
+  // After celebration: slide & collapse using CSS transitions
   setTimeout(() => {
     li.classList.remove('topic-item--celebrate');
     li.style.pointerEvents = 'none';
     li.style.overflow = 'hidden';
     
-    // Trigger stripe update so siblings recolor during animation
     updateZebraStripes(DOM.taskList);
     
-    // Capture siblings BEFORE we start collapsing (for FLIP)
-    const siblings = [...DOM.taskList.children].filter(c => c !== li && !c.classList.contains('topic-item--dismissing'));
-    const oldTops = captureRects(siblings);
-    
-    // Lock height to a fixed px value, then animate with CSS
     const h = li.offsetHeight;
     li.style.height = h + 'px';
     li.style.transition = 'none';
-    li.offsetHeight; // force reflow once
+    li.offsetHeight; // single reflow
     
-    // Flash completed icon
     setTimeout(() => {
       DOM.completedBtn.classList.remove('header-icon-btn--flash');
       DOM.completedBtn.offsetHeight;
@@ -505,9 +498,7 @@ function handleTaskComplete(e, li, id) {
       }, { once: true });
     }, 100);
     
-    // Add dismissing class to trigger pure CSS collapse
-    li.classList.add('topic-item--dismissing');
-    li.style.transition = 'transform 0.45s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.45s cubic-bezier(0.4, 0, 0.2, 1), height 0.45s cubic-bezier(0.4, 0, 0.2, 1), margin 0.45s cubic-bezier(0.4, 0, 0.2, 1), padding 0.45s cubic-bezier(0.4, 0, 0.2, 1), border-width 0.45s cubic-bezier(0.4, 0, 0.2, 1)';
+    li.style.transition = 'transform 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.4s cubic-bezier(0.4, 0, 0.2, 1), height 0.4s cubic-bezier(0.4, 0, 0.2, 1), margin-bottom 0.4s cubic-bezier(0.4, 0, 0.2, 1), padding 0.4s cubic-bezier(0.4, 0, 0.2, 1), border-width 0.4s cubic-bezier(0.4, 0, 0.2, 1), background 0.4s, border-color 0.4s';
     
     requestAnimationFrame(() => {
       li.style.transform = 'translateX(-60%) scale(0.8)';
@@ -525,6 +516,7 @@ function handleTaskComplete(e, li, id) {
       if (e.propertyName !== 'height') return;
       li.removeEventListener('transitionend', handler);
       li.remove();
+      renderCompletedTasks();
     });
   }, 200);
 }
@@ -542,31 +534,36 @@ function handleUntick(li, id) {
     const activeTasks = tasks.filter(t => !t.completed);
     task.position = activeTasks.length > 0 ? activeTasks[activeTasks.length - 1].position + 1000 : 1000;
     task._lastMutatedAt = Date.now();
-    saveTasks(); // instant cache
+    saveTasks();
     db.from('tasks').update({ completed: false, completedAt: null, position: task.position }).eq('id', task.id).then();
   }
 
-  // Animate out of completed panel (driven by spring physics)
+  // Animate out with pure CSS transitions
   li.style.pointerEvents = 'none';
   li.style.overflow = 'hidden';
-  updateZebraStripes(DOM.completedList);
   
-  const startHeight = li.offsetHeight;
+  const h = li.offsetHeight;
+  li.style.height = h + 'px';
+  li.style.transition = 'none';
+  li.offsetHeight; // single reflow
   
-  animateSpring(li, startHeight, 0, (y, el) => {
-    const progress = y / startHeight;
-    el.style.height = `${y}px`;
-    el.style.marginBottom = `${progress * 8}px`;
-    el.style.paddingTop = `${progress * 14}px`;
-    el.style.paddingBottom = `${progress * 14}px`;
-    el.style.borderWidth = `${progress}px`; 
-    el.style.opacity = progress;
-    
-    const slide = (1 - progress) * 60; // 0 to 60%
-    el.style.transform = `translateX(${slide}%) scale(${progress})`;
-  }, (el) => {
-    el.remove();
-    renderCompletedTasks();
+  li.style.transition = 'transform 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1), height 0.35s cubic-bezier(0.4, 0, 0.2, 1), margin-bottom 0.35s cubic-bezier(0.4, 0, 0.2, 1), padding 0.35s cubic-bezier(0.4, 0, 0.2, 1), border-width 0.35s cubic-bezier(0.4, 0, 0.2, 1)';
+  
+  requestAnimationFrame(() => {
+    li.style.transform = 'translateX(60%) scale(0.8)';
+    li.style.opacity = '0';
+    li.style.height = '0px';
+    li.style.marginBottom = '0px';
+    li.style.paddingTop = '0px';
+    li.style.paddingBottom = '0px';
+    li.style.borderWidth = '0px';
+  });
+  
+  li.addEventListener('transitionend', function handler(e) {
+    if (e.propertyName !== 'height') return;
+    li.removeEventListener('transitionend', handler);
+    li.remove();
+    DOM.completedEmpty.style.display = DOM.completedList.children.length ? 'none' : 'block';
 
     // Add back to main list with animation
     const newEl = createTaskElement(task);
@@ -597,10 +594,10 @@ function spawnConfetti(label, cb) {
     const dist = 120 + Math.random() * 200;
     const tx = Math.cos(angle) * dist;
     const ty = Math.sin(angle) * dist;
-    const peakY = -80 - Math.random() * 120; // how high it arcs
+    const peakY = -30 - Math.random() * 50; // subtle arc, not too high
     const sz = 6 + Math.random() * 8;
     const rot = (Math.random() - 0.5) * 900;
-    const dur = 0.8 + Math.random() * 0.6;
+    const dur = 0.7 + Math.random() * 0.5;
 
     el.style.cssText = `
       left:${ox}px;top:${oy}px;
@@ -907,15 +904,24 @@ function onPointerUp(e) {
     item.style.transform = 'scale(0) rotate(-15deg)';
     item.style.opacity = '0';
     
-    // Collapse placeholder using spring
+    // Collapse placeholder using CSS transition
     const startHeight = ph.offsetHeight;
-    animateSpring(ph, startHeight, 0, (y, el) => {
-      const p = y / startHeight;
-      el.style.height = `${y}px`;
-      el.style.marginBottom = `${p * 8}px`;
-      el.style.opacity = p;
-    }, (el) => {
-      el.remove();
+    ph.style.height = startHeight + 'px';
+    ph.style.transition = 'none';
+    ph.offsetHeight; // single reflow
+    
+    ph.style.transition = 'height 0.35s cubic-bezier(0.4, 0, 0.2, 1), margin-bottom 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1)';
+    
+    requestAnimationFrame(() => {
+      ph.style.height = '0px';
+      ph.style.marginBottom = '0px';
+      ph.style.opacity = '0';
+    });
+    
+    ph.addEventListener('transitionend', function handler(e) {
+      if (e.propertyName !== 'height') return;
+      ph.removeEventListener('transitionend', handler);
+      ph.remove();
       item.remove();
       const task = tasks.find(t => t.id === item.dataset.id);
       if (task) task._lastMutatedAt = Date.now();
