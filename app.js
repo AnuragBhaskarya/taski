@@ -576,43 +576,93 @@ function handleUntick(li, id) {
 
 function spawnConfetti(label, cb) {
   const r = cb.getBoundingClientRect();
-  const ox = r.left + r.width/2, oy = r.top + r.height/2;
-  const layer = document.createElement('div');
-  layer.className = 'confetti-layer';
-  document.body.appendChild(layer);
+  const ox = r.left + r.width / 2, oy = r.top + r.height / 2;
+  
+  const canvas = document.createElement('canvas');
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = window.innerWidth * dpr;
+  canvas.height = window.innerHeight * dpr;
+  canvas.style.width = window.innerWidth + 'px';
+  canvas.style.height = window.innerHeight + 'px';
+  canvas.style.position = 'fixed';
+  canvas.style.top = '0';
+  canvas.style.left = '0';
+  canvas.style.pointerEvents = 'none';
+  canvas.style.zIndex = '9999';
+  document.body.appendChild(canvas);
+  
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
   const cols = ['#2a9c73','#34d399','#10b981','#059669','#6ee7b7','#a7f3d0','#d1fae5','#065f46'];
   const ps = [];
-  for (let i = 0; i < 35; i++) {
-    const el = document.createElement('div');
-    el.className = 'confetti-particle';
-    const sz = 6+Math.random()*8, rect = Math.random()>.5;
-    el.style.width = sz+'px';
-    el.style.height = (rect ? sz*(.5+Math.random()*.5) : sz)+'px';
-    el.style.borderRadius = rect ? '2px' : '50%';
-    el.style.background = cols[Math.floor(Math.random()*cols.length)];
-    el.style.left = ox+'px'; el.style.top = oy+'px';
-    layer.appendChild(el);
-    const a = -Math.PI/2+(Math.random()-.5)*Math.PI*1.2, sp = 300+Math.random()*500;
-    ps.push({ el, x:ox, y:oy,
-      vx:Math.cos(a)*sp*(.6+Math.random()*.4), vy:Math.sin(a)*sp*(.6+Math.random()*.4),
-      rot:0, rs:(Math.random()-.5)*800, g:600+Math.random()*300,
-      dr:.97+Math.random()*.02, op:1, life:0 });
+  
+  // Create 40 particles for a beautiful burst
+  for (let i = 0; i < 40; i++) {
+    const sz = 6 + Math.random() * 8, rect = Math.random() > 0.5;
+    const a = -Math.PI / 2 + (Math.random() - 0.5) * Math.PI * 1.2;
+    const sp = 300 + Math.random() * 600;
+    ps.push({ 
+      x: ox, y: oy,
+      w: sz, h: rect ? sz * (0.5 + Math.random() * 0.5) : sz,
+      rect,
+      col: cols[Math.floor(Math.random() * cols.length)],
+      vx: Math.cos(a) * sp * (0.6 + Math.random() * 0.4), 
+      vy: Math.sin(a) * sp * (0.6 + Math.random() * 0.4),
+      rot: Math.random() * Math.PI * 2, 
+      rs: (Math.random() - 0.5) * 15, 
+      g: 600 + Math.random() * 300,
+      dr: 0.96 + Math.random() * 0.03, 
+      op: 1, 
+      life: 0 
+    });
   }
-  let st = performance.now(); const ml = 2.5;
-  (function tick(now) {
-    const dt = Math.min((now-st)/1000,.05); st = now; let done = true;
+  
+  let st = performance.now(); 
+  const ml = 2.5;
+  
+  function tick(now) {
+    const dt = Math.min((now - st) / 1000, 0.05); 
+    st = now; 
+    let done = true;
+    
+    ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+    
     for (const p of ps) {
-      if (p.op<=0) continue; done = false;
-      p.life+=dt; p.vy+=p.g*dt; p.vx*=p.dr; p.vy*=p.dr;
-      p.x+=p.vx*dt; p.y+=p.vy*dt; p.rot+=p.rs*dt;
-      if (p.life>ml*.6) p.op = Math.max(0,1-(p.life-ml*.6)/(ml*.4));
-      p.el.style.transform = `translate(-50%,-50%) rotate(${p.rot|0}deg)`;
-      p.el.style.left = p.x.toFixed(1)+'px';
-      p.el.style.top = p.y.toFixed(1)+'px';
-      p.el.style.opacity = p.op.toFixed(2);
+      if (p.op <= 0) continue; 
+      done = false;
+      p.life += dt; 
+      p.vy += p.g * dt; 
+      p.vx *= p.dr; 
+      p.vy *= p.dr;
+      p.x += p.vx * dt; 
+      p.y += p.vy * dt; 
+      p.rot += p.rs * dt;
+      if (p.life > ml * 0.6) p.op = Math.max(0, 1 - (p.life - ml * 0.6) / (ml * 0.4));
+      
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.globalAlpha = p.op;
+      ctx.fillStyle = p.col;
+      
+      if (p.rect) {
+        ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+      } else {
+        ctx.beginPath();
+        ctx.arc(0, 0, p.w / 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
     }
-    if (!done && ps[0].life<ml) requestAnimationFrame(tick); else layer.remove();
-  })(st);
+    
+    if (!done && ps[0].life < ml) {
+      requestAnimationFrame(tick);
+    } else {
+      canvas.remove();
+    }
+  }
+  requestAnimationFrame(tick);
 }
 
 function spawnFlash(li) {
