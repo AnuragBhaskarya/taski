@@ -59,52 +59,56 @@ function scheduleRender() {
 async function initApp() {
   try {
     const res = await fetch('/api/env');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const env = await res.json();
+    if (!env || !env.url || !env.key) throw new Error('Missing environment credentials');
     supabaseUrl = env.url;
     supabaseKey = env.key;
-    db = window.supabase.createClient(supabaseUrl, supabaseKey);
-    
-    db
-      .channel('tasks')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, payload => {
-        if (payload.eventType === 'INSERT') {
-          if (!tasks.find(t => t.id === payload.new.id)) {
-            tasks.push({ ...payload.new, _lastMutatedAt: 0 });
-            scheduleRender();
+    if (window.supabase) {
+      db = window.supabase.createClient(supabaseUrl, supabaseKey);
+      
+      db
+        .channel('tasks')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, payload => {
+          if (payload.eventType === 'INSERT') {
+            if (!tasks.find(t => t.id === payload.new.id)) {
+              tasks.push({ ...payload.new, _lastMutatedAt: 0 });
+              scheduleRender();
+            }
+          } else if (payload.eventType === 'UPDATE') {
+            const localTask = tasks.find(t => t.id === payload.new.id);
+            if (localTask) {
+              if (Date.now() - (localTask._lastMutatedAt || 0) < 2000) return;
+              Object.assign(localTask, {
+                title: payload.new.text,
+                completed: payload.new.completed,
+                completedAt: payload.new.completedAt,
+                position: payload.new.position
+              });
+              scheduleRender();
+            }
+          } else if (payload.eventType === 'DELETE') {
+            const localTask = tasks.find(t => t.id === payload.old.id);
+            if (localTask) {
+              if (Date.now() - (localTask._lastMutatedAt || 0) < 2000) return;
+              tasks = tasks.filter(t => t.id !== payload.old.id);
+              scheduleRender();
+            }
           }
-        } else if (payload.eventType === 'UPDATE') {
-          const localTask = tasks.find(t => t.id === payload.new.id);
-          if (localTask) {
-            if (Date.now() - (localTask._lastMutatedAt || 0) < 2000) return;
-            Object.assign(localTask, {
-              title: payload.new.text,
-              completed: payload.new.completed,
-              completedAt: payload.new.completedAt,
-              position: payload.new.position
-            });
-            scheduleRender();
-          }
-        } else if (payload.eventType === 'DELETE') {
-          const localTask = tasks.find(t => t.id === payload.old.id);
-          if (localTask) {
-            if (Date.now() - (localTask._lastMutatedAt || 0) < 2000) return;
-            tasks = tasks.filter(t => t.id !== payload.old.id);
-            scheduleRender();
-          }
-        }
-      })
-      .subscribe();
+        })
+        .subscribe();
 
-    await loadTasks();
+      await loadTasks();
+    }
   } catch (e) {
-    console.error('Failed to initialize app', e);
-    alert("Could not load database credentials. If testing locally, you must run 'npx wrangler pages dev'.");
+    console.warn('[Taski] Remote database sync offline or not configured. Running in local-first mode.', e);
   }
 }
 
 initApp();
 
 async function loadTasks() {
+  if (!db) return;
   try {
     const { data, error } = await db.from('tasks').select('*').order('position', { ascending: true });
     if (!error && data) {
@@ -417,16 +421,23 @@ DOM.modalConfirm.addEventListener('click', () => {
 
   DOM.modalConfirm.disabled = true;
   
-  db.from('tasks').insert([{
-    id: newTask.id,
-    text: newTask.title,
-    completed: newTask.completed,
-    completedAt: newTask.completedAt,
-    position: newTask.position
-  }]).then(({error}) => { 
+  if (db) {
+    db.from('tasks').insert([{
+      id: newTask.id,
+      text: newTask.title,
+      completed: newTask.completed,
+      completedAt: newTask.completedAt,
+      position: newTask.position
+    }]).then(({error}) => { 
+      DOM.modalConfirm.disabled = false;
+      if (error && error.code !== '23505') console.error(error); 
+    }).catch(err => {
+      DOM.modalConfirm.disabled = false;
+      console.warn('Supabase insert failed', err);
+    });
+  } else {
     DOM.modalConfirm.disabled = false;
-    if (error && error.code !== '23505') console.error(error); 
-  });
+  }
 
   DOM.modalInput.value = '';
   closeModal();
@@ -488,7 +499,7 @@ function handleTaskComplete(e, li, id) {
     task.completedAt = Date.now();
     task._lastMutatedAt = Date.now();
     saveTasks(); // instant cache
-    db.from('tasks').update({ completed: true, completedAt: task.completedAt }).eq('id', task.id).then();
+    if (db) db.from('tasks').update({ completed: true, completedAt: task.completedAt }).eq('id', task.id).then();
   }
 
   li.classList.add('topic-item--complete', 'topic-item--celebrate');
@@ -566,7 +577,7 @@ function handleUntick(li, id) {
   task.position = activeTasks.length > 0 ? activeTasks[activeTasks.length - 1].position + 1000 : 1000;
   task._lastMutatedAt = Date.now();
   saveTasks();
-  db.from('tasks').update({ completed: false, completedAt: null, position: task.position }).eq('id', task.id).then();
+  if (db) db.from('tasks').update({ completed: false, completedAt: null, position: task.position }).eq('id', task.id).then();
 
   // Immediate CSS collapse — no forced reflow needed if we use rAF
   li.style.overflow = 'hidden';
@@ -955,7 +966,7 @@ function onPointerUp(e) {
       if (task) task._lastMutatedAt = Date.now();
       tasks = tasks.filter(t => t.id !== item.dataset.id);
       saveTasks(); // instant cache
-      db.from('tasks').delete().eq('id', item.dataset.id).then();
+      if (db) db.from('tasks').delete().eq('id', item.dataset.id).then();
       updateZebraStripes(DOM.taskList);
     });
     
@@ -1012,7 +1023,7 @@ function onPointerUp(e) {
     });
 
     saveTasks(); // instant cache
-    db.from('tasks').update({ position: newPos }).eq('id', droppedTask.id).then();
+    if (db) db.from('tasks').update({ position: newPos }).eq('id', droppedTask.id).then();
     updateZebraStripes(DOM.taskList);
     drag = null;
     
