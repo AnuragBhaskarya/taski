@@ -1214,10 +1214,11 @@ function startCompletedDrag(pd) {
   }
 }
 
-function isPointerOutsideCompletedPanel(clientX) {
+function isPointerOutsideCompletedPanel(clientX, wasOutside = false) {
   const panelWidth = DOM.completedPanel.offsetWidth || Math.min(380, window.innerWidth * 0.78);
   const panelLeft = window.innerWidth - panelWidth;
-  return clientX < panelLeft;
+  const threshold = wasOutside ? (panelLeft + 12) : (panelLeft - 8);
+  return clientX < threshold;
 }
 
 function onCompletedPointerMove(e) {
@@ -1255,7 +1256,7 @@ function onCompletedPointerMove(e) {
   item.style.top  = (e.clientY - oy) + 'px';
 
   // Check if touch point reaches the red area outside the completed panel
-  const isOutside = isPointerOutsideCompletedPanel(e.clientX);
+  const isOutside = isPointerOutsideCompletedPanel(e.clientX, completedDrag.isOutside);
 
   if (isOutside !== completedDrag.isOutside) {
     completedDrag.isOutside = isOutside;
@@ -1282,7 +1283,7 @@ function onCompletedPointerUp(e) {
 
   if (!completedDrag) return;
   const { item, ph, pointerId } = completedDrag;
-  const isOutside = isPointerOutsideCompletedPanel(completedDrag.clientX);
+  const isOutside = isPointerOutsideCompletedPanel(completedDrag.clientX, completedDrag.isOutside);
 
   try { item.releasePointerCapture(pointerId); } catch(_) {}
 

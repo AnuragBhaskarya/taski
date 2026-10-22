@@ -616,11 +616,22 @@ main::-webkit-scrollbar-thumb {
 .completed-scrim {
   position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(0, 0, 0, 0.35);
+  background-color: rgba(0, 0, 0, 0.35);
   z-index: 499;
-  transition: opacity 0.3s ease, background 0.35s cubic-bezier(0.22, 1, 0.36, 1), backdrop-filter 0.35s ease;
+  transition: opacity 0.4s ease, background-color 0.65s cubic-bezier(0.22, 1, 0.36, 1), backdrop-filter 0.65s cubic-bezier(0.22, 1, 0.36, 1);
   touch-action: none;
   overscroll-behavior: none;
+}
+
+.completed-scrim::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; bottom: 0;
+  right: min(380px, 78vw);
+  background: radial-gradient(circle at center, rgba(239, 68, 68, 0.55) 0%, rgba(185, 28, 28, 0.68) 100%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.65s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .completed-scrim.hidden {
@@ -630,9 +641,9 @@ main::-webkit-scrollbar-thumb {
 
 /* ── Red Delete Zone when Completed Task is Dragged ── */
 .completed-scrim--delete-mode {
-  background: radial-gradient(circle at center, rgba(239, 68, 68, 0.45) 0%, rgba(220, 38, 38, 0.35) 100%) !important;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  background-color: rgba(220, 38, 38, 0.28) !important;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 .completed-scrim--delete-mode .completed-trash-zone {
@@ -642,22 +653,20 @@ main::-webkit-scrollbar-thumb {
 
 /* Intensified red when dragged task reaches outside (red area) */
 .completed-scrim--hovered {
-  background: radial-gradient(circle at center, rgba(239, 68, 68, 0.75) 0%, rgba(220, 38, 38, 0.65) 100%) !important;
+  background-color: rgba(185, 28, 28, 0.62) !important;
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
 }
 
+.completed-scrim--hovered::before {
+  opacity: 1;
+}
+
 .completed-scrim--hovered .completed-trash-circle {
-  transform: scale(1.2);
+  transform: scale(1.18);
   background: #ffffff;
   color: #dc2626;
   box-shadow: 0 0 45px rgba(239, 68, 68, 0.85), 0 12px 36px rgba(0, 0, 0, 0.4);
-  animation: trash-pulse 0.8s ease-in-out infinite alternate;
-}
-
-@keyframes trash-pulse {
-  0% { transform: scale(1.18); }
-  100% { transform: scale(1.25); }
 }
 
 .completed-trash-zone {
@@ -672,7 +681,7 @@ main::-webkit-scrollbar-thumb {
   pointer-events: none;
   opacity: 0;
   transform: scale(0.85);
-  transition: opacity 0.35s cubic-bezier(0.22, 1, 0.36, 1), transform 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+  transition: opacity 0.4s cubic-bezier(0.22, 1, 0.36, 1), transform 0.4s cubic-bezier(0.22, 1, 0.36, 1);
   z-index: 1;
   padding: 8px;
   box-sizing: border-box;
@@ -688,7 +697,7 @@ main::-webkit-scrollbar-thumb {
   align-items: center;
   justify-content: center;
   box-shadow: 0 6px 24px rgba(220, 38, 38, 0.35), 0 2px 8px rgba(0, 0, 0, 0.2);
-  transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), background-color 0.25s ease, box-shadow 0.25s ease, color 0.25s ease;
+  transition: transform 0.55s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.5s ease, box-shadow 0.5s ease, color 0.5s ease;
   flex-shrink: 0;
   aspect-ratio: 1 / 1;
 }
@@ -727,7 +736,7 @@ main::-webkit-scrollbar-thumb {
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.28);
   cursor: grabbing;
   opacity: 1;
-  transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.22s ease, box-shadow 0.22s ease, border-color 0.22s ease;
+  transition: transform 0.6s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.5s ease, box-shadow 0.5s ease, border-color 0.5s ease;
   transform-origin: center center;
 }
 
