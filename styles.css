@@ -441,7 +441,7 @@ main::-webkit-scrollbar-thumb {
 }
 
 .topic-item--complete .task-time {
-  max-height: 24px;
+  max-height: 48px;
   margin-top: 4px;
   opacity: 1;
   transform: translateY(0);
@@ -660,12 +660,6 @@ main::-webkit-scrollbar-thumb {
   100% { transform: scale(1.25); }
 }
 
-.completed-scrim--hovered .completed-trash-text {
-  color: #ffffff;
-  transform: scale(1.08);
-  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.7);
-}
-
 .completed-trash-zone {
   position: absolute;
   top: 0;
@@ -673,10 +667,8 @@ main::-webkit-scrollbar-thumb {
   bottom: 0;
   right: min(380px, 80vw);
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 14px;
   pointer-events: none;
   opacity: 0;
   transform: scale(0.85);
@@ -699,16 +691,6 @@ main::-webkit-scrollbar-thumb {
   transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), background-color 0.25s ease, box-shadow 0.25s ease, color 0.25s ease;
 }
 
-.completed-trash-text {
-  font-size: 14px;
-  font-weight: 700;
-  color: #ffffff;
-  letter-spacing: 0.5px;
-  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
-  transition: transform 0.25s ease, color 0.25s ease;
-  white-space: nowrap;
-}
-
 @media (max-width: 480px) {
   .completed-trash-circle {
     width: 48px;
@@ -717,10 +699,6 @@ main::-webkit-scrollbar-thumb {
   .completed-trash-circle svg {
     width: 24px;
     height: 24px;
-  }
-  .completed-trash-text {
-    font-size: 11px;
-    letter-spacing: 0.3px;
   }
 }
 

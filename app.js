@@ -40,6 +40,28 @@ function isTaskLocked(task) {
   return (Date.now() - completedTime) >= ONE_HOUR_MS;
 }
 
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function formatCompletedDateTime(timestamp) {
+  if (!timestamp) return '';
+  const d = new Date(typeof timestamp === 'number' ? timestamp : Number(timestamp) || timestamp);
+  if (isNaN(d.getTime())) return '';
+
+  const day = d.getDate();
+  const month = MONTH_NAMES[d.getMonth()];
+  const year = d.getFullYear();
+  const dateStr = `${day} ${month}, ${year}`;
+
+  let hours = d.getHours();
+  const minutes = String(d.getMinutes()).padStart(2, '0');
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  hours = hours % 12;
+  const hoursStr = String(hours ? hours : 12).padStart(2, '0');
+  const timeStr = `${hoursStr}:${minutes} ${ampm}`;
+
+  return `${dateStr}<br>${timeStr}`;
+}
+
 let tasks = JSON.parse(localStorage.getItem('taski_tasks') || '[]');
 
 // Instant Paint! Render cache immediately before any network requests
@@ -345,16 +367,8 @@ function createTaskElement(task, forCompletedPanel = false) {
   li.className = `topic-item ${task.completed ? 'topic-item--complete' : ''}`;
   li.dataset.id = task.id;
 
-  const completedTime = getTaskCompletionTime(task);
   const locked = forCompletedPanel && isTaskLocked(task);
-
-  let timeText = '';
-  if (completedTime) {
-    timeText = 'Completed ' + new Date(completedTime).toLocaleString();
-    if (locked) {
-      timeText += ' • 🔒 Locked';
-    }
-  }
+  const timeHtml = task.completedAt ? formatCompletedDateTime(task.completedAt) : '';
 
   li.innerHTML = `
     <label class="cb-hit ${locked ? 'cb-hit--locked' : ''}">
@@ -362,7 +376,7 @@ function createTaskElement(task, forCompletedPanel = false) {
     </label>
     <div class="task-content">
       <div class="task-title">${escapeHtml(task.title)}</div>
-      <div class="task-time">${timeText}</div>
+      <div class="task-time">${timeHtml}</div>
     </div>
   `;
 
@@ -513,14 +527,6 @@ let completedScrim = null;
 let preventScrimClose = false;
 let completedPanelTimer = null;
 
-function updateTrashZonePosition() {
-  if (!completedScrim) return;
-  const trashZone = completedScrim.querySelector('.completed-trash-zone');
-  if (!trashZone) return;
-  const panelRect = DOM.completedPanel.getBoundingClientRect();
-  trashZone.style.width = Math.max(0, panelRect.left) + 'px';
-}
-
 function openCompletedPanel() {
   renderCompletedTasks();
   DOM.completedPanel.classList.remove('hidden');
@@ -542,7 +548,6 @@ function openCompletedPanel() {
             <line x1="14" y1="11" x2="14" y2="17"></line>
           </svg>
         </div>
-        <span class="completed-trash-text">Release to delete</span>
       </div>
     `;
     completedScrim.addEventListener('click', () => {
@@ -552,7 +557,6 @@ function openCompletedPanel() {
     document.body.appendChild(completedScrim);
   }
 
-  updateTrashZonePosition();
   // Force reflow then show
   completedScrim.offsetHeight;
   completedScrim.classList.remove('hidden');
@@ -598,7 +602,7 @@ function handleTaskComplete(e, li, id) {
 
   li.classList.add('topic-item--complete', 'topic-item--celebrate');
   const td = li.querySelector('.task-time');
-  if (td) td.textContent = 'Completed ' + new Date(task.completedAt).toLocaleString();
+  if (td) td.innerHTML = formatCompletedDateTime(task.completedAt);
 
   // Confetti + flash + ripple
   spawnConfetti(li, cb);
@@ -1178,8 +1182,6 @@ function startCompletedDrag(pd) {
   ph.style.marginBottom = getComputedStyle(item).marginBottom;
   item.parentNode.insertBefore(ph, item);
 
-  updateTrashZonePosition();
-
   // Lift item
   item.classList.add('completed-drag-active');
   item.style.position = 'fixed';
@@ -1359,12 +1361,6 @@ function onCompletedPointerUp(e) {
   item.addEventListener('transitionend', settleCompleted, { once: true });
   const fallback = setTimeout(settleCompleted, 300);
 }
-
-window.addEventListener('resize', () => {
-  if (completedScrim && !DOM.completedPanel.classList.contains('hidden')) {
-    updateTrashZonePosition();
-  }
-});
 
 // Prevent scrolling while dragging
 window.addEventListener('touchmove', (e) => {
