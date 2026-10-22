@@ -380,6 +380,26 @@ main::-webkit-scrollbar-thumb {
   transform: rotate(45deg);
 }
 
+.cb-hit--locked {
+  cursor: not-allowed;
+}
+
+.topic-item__checkbox:disabled {
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+
+/* ── Locked Item Shake Animation ── */
+@keyframes item-locked-shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-5px); }
+  40%, 80% { transform: translateX(5px); }
+}
+
+.item--locked-shake {
+  animation: item-locked-shake 0.35s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
 .task-content {
   flex: 1;
   display: flex;
@@ -519,7 +539,7 @@ main::-webkit-scrollbar-thumb {
 .completed-panel {
   position: fixed;
   top: 0; right: 0; bottom: 0;
-  width: min(380px, 85vw);
+  width: min(380px, 80vw);
   background: var(--bg);
   border-left: 1px solid var(--line);
   box-shadow: -8px 0 30px rgba(0,0,0,0.12);
@@ -577,8 +597,12 @@ main::-webkit-scrollbar-thumb {
 }
 
 .completed-task-list .topic-item {
-  cursor: default;
+  cursor: grab;
   touch-action: pan-y;
+}
+
+.completed-task-list .topic-item:active {
+  cursor: grabbing;
 }
 
 .completed-empty {
@@ -592,15 +616,145 @@ main::-webkit-scrollbar-thumb {
 .completed-scrim {
   position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;
-  background: rgba(0,0,0,0.35);
+  background: rgba(0, 0, 0, 0.35);
   z-index: 499;
-  transition: opacity 0.3s ease;
+  transition: opacity 0.3s ease, background 0.35s cubic-bezier(0.22, 1, 0.36, 1), backdrop-filter 0.35s ease;
   touch-action: none;
   overscroll-behavior: none;
 }
+
 .completed-scrim.hidden {
   opacity: 0;
   pointer-events: none;
+}
+
+/* ── Red Delete Zone when Completed Task is Dragged ── */
+.completed-scrim--delete-mode {
+  background: radial-gradient(circle at center, rgba(239, 68, 68, 0.45) 0%, rgba(220, 38, 38, 0.35) 100%) !important;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.completed-scrim--delete-mode .completed-trash-zone {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* Intensified red when dragged task reaches outside (red area) */
+.completed-scrim--hovered {
+  background: radial-gradient(circle at center, rgba(239, 68, 68, 0.75) 0%, rgba(220, 38, 38, 0.65) 100%) !important;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.completed-scrim--hovered .completed-trash-circle {
+  transform: scale(1.2);
+  background: #ffffff;
+  color: #dc2626;
+  box-shadow: 0 0 45px rgba(239, 68, 68, 0.85), 0 12px 36px rgba(0, 0, 0, 0.4);
+  animation: trash-pulse 0.8s ease-in-out infinite alternate;
+}
+
+@keyframes trash-pulse {
+  0% { transform: scale(1.18); }
+  100% { transform: scale(1.25); }
+}
+
+.completed-scrim--hovered .completed-trash-text {
+  color: #ffffff;
+  transform: scale(1.08);
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.7);
+}
+
+.completed-trash-zone {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  right: min(380px, 80vw);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  pointer-events: none;
+  opacity: 0;
+  transform: scale(0.85);
+  transition: opacity 0.35s cubic-bezier(0.22, 1, 0.36, 1), transform 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+  z-index: 1;
+  padding: 20px;
+  box-sizing: border-box;
+}
+
+.completed-trash-circle {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.95);
+  color: #ef4444;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 6px 24px rgba(220, 38, 38, 0.35), 0 2px 8px rgba(0, 0, 0, 0.2);
+  transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), background-color 0.25s ease, box-shadow 0.25s ease, color 0.25s ease;
+}
+
+.completed-trash-text {
+  font-size: 14px;
+  font-weight: 700;
+  color: #ffffff;
+  letter-spacing: 0.5px;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+  transition: transform 0.25s ease, color 0.25s ease;
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  .completed-trash-circle {
+    width: 48px;
+    height: 48px;
+  }
+  .completed-trash-circle svg {
+    width: 24px;
+    height: 24px;
+  }
+  .completed-trash-text {
+    font-size: 11px;
+    letter-spacing: 0.3px;
+  }
+}
+
+/* ── Completed Task Dragging Styles ── */
+.topic-item.completed-drag-active {
+  position: fixed;
+  z-index: 9500;
+  pointer-events: none;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.28);
+  cursor: grabbing;
+  opacity: 1;
+  transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.22s ease, box-shadow 0.22s ease, border-color 0.22s ease;
+  transform-origin: center center;
+}
+
+.topic-item.completed-drag-item--shrink {
+  transform: scale(0.65) rotate(-2.5deg);
+  opacity: 0.88;
+  box-shadow: 0 12px 30px rgba(220, 38, 38, 0.4);
+  border-color: #ef4444;
+}
+
+.completed-drag-placeholder {
+  position: relative;
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, 0.05);
+  border: 1.5px dashed var(--line);
+  box-sizing: border-box;
+  transition: height 0.3s cubic-bezier(0.22, 1, 0.36, 1), margin-bottom 0.3s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.25s ease;
+}
+
+.dark .completed-drag-placeholder {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.15);
 }
 
 /* ── Drag Placeholder ── */

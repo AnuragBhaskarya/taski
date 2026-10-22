@@ -21,6 +21,25 @@ const DOM = {
   completedEmpty: document.getElementById('completedEmpty'),
 };
 
+// ══════════════════════════════════
+//  Task Completion Lock (1 Hour Rule)
+// ══════════════════════════════════
+
+const ONE_HOUR_MS = 60 * 60 * 1000;
+
+function getTaskCompletionTime(task) {
+  if (!task.completed || !task.completedAt) return null;
+  if (typeof task.completedAt === 'number') return task.completedAt;
+  const parsed = new Date(task.completedAt).getTime();
+  return isNaN(parsed) ? null : parsed;
+}
+
+function isTaskLocked(task) {
+  const completedTime = getTaskCompletionTime(task);
+  if (!completedTime) return false;
+  return (Date.now() - completedTime) >= ONE_HOUR_MS;
+}
+
 let tasks = JSON.parse(localStorage.getItem('taski_tasks') || '[]');
 
 // Instant Paint! Render cache immediately before any network requests
@@ -326,21 +345,46 @@ function createTaskElement(task, forCompletedPanel = false) {
   li.className = `topic-item ${task.completed ? 'topic-item--complete' : ''}`;
   li.dataset.id = task.id;
 
+  const completedTime = getTaskCompletionTime(task);
+  const locked = forCompletedPanel && isTaskLocked(task);
+
+  let timeText = '';
+  if (completedTime) {
+    timeText = 'Completed ' + new Date(completedTime).toLocaleString();
+    if (locked) {
+      timeText += ' • 🔒 Locked';
+    }
+  }
+
   li.innerHTML = `
-    <label class="cb-hit">
-      <input type="checkbox" class="topic-item__checkbox" ${task.completed ? 'checked' : ''}>
+    <label class="cb-hit ${locked ? 'cb-hit--locked' : ''}">
+      <input type="checkbox" class="topic-item__checkbox" ${task.completed ? 'checked' : ''} ${locked ? 'disabled' : ''}>
     </label>
     <div class="task-content">
       <div class="task-title">${escapeHtml(task.title)}</div>
-      <div class="task-time">${task.completedAt ? 'Completed ' + new Date(task.completedAt).toLocaleString() : ''}</div>
+      <div class="task-time">${timeText}</div>
     </div>
   `;
 
   const cb = li.querySelector('.topic-item__checkbox');
+  const cbHit = li.querySelector('.cb-hit');
 
   if (forCompletedPanel) {
-    // In completed panel: unticking restores the task
-    cb.addEventListener('change', () => handleUntick(li, task.id));
+    if (locked) {
+      // Locked tasks (completed >= 1hr ago) cannot be unticked
+      cbHit.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        li.classList.remove('item--locked-shake');
+        void li.offsetWidth;
+        li.classList.add('item--locked-shake');
+      });
+    } else {
+      cb.addEventListener('change', () => handleUntick(li, task.id));
+    }
+
+    // Drag to delete outside panel (applies to ALL completed tasks, including locked ones)
+    li.addEventListener('pointerdown', onCompletedPointerDown);
   } else {
     // In main list: ticking triggers dismiss animation
     cb.addEventListener('change', e => handleTaskComplete(e, li, task.id));
@@ -466,6 +510,16 @@ DOM.modalInput.addEventListener('keydown', e => {
 // ══════════════════════════════════
 
 let completedScrim = null;
+let preventScrimClose = false;
+let completedPanelTimer = null;
+
+function updateTrashZonePosition() {
+  if (!completedScrim) return;
+  const trashZone = completedScrim.querySelector('.completed-trash-zone');
+  if (!trashZone) return;
+  const panelRect = DOM.completedPanel.getBoundingClientRect();
+  trashZone.style.width = Math.max(0, panelRect.left) + 'px';
+}
 
 function openCompletedPanel() {
   renderCompletedTasks();
@@ -478,18 +532,46 @@ function openCompletedPanel() {
   if (!completedScrim) {
     completedScrim = document.createElement('div');
     completedScrim.className = 'completed-scrim';
-    completedScrim.addEventListener('click', closeCompletedPanel);
+    completedScrim.innerHTML = `
+      <div class="completed-trash-zone">
+        <div class="completed-trash-circle">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            <line x1="10" y1="11" x2="10" y2="17"></line>
+            <line x1="14" y1="11" x2="14" y2="17"></line>
+          </svg>
+        </div>
+        <span class="completed-trash-text">Release to delete</span>
+      </div>
+    `;
+    completedScrim.addEventListener('click', () => {
+      if (preventScrimClose) return;
+      closeCompletedPanel();
+    });
     document.body.appendChild(completedScrim);
   }
+
+  updateTrashZonePosition();
   // Force reflow then show
   completedScrim.offsetHeight;
   completedScrim.classList.remove('hidden');
+
+  if (completedPanelTimer) clearInterval(completedPanelTimer);
+  completedPanelTimer = setInterval(renderCompletedTasks, 30000);
 }
 
 function closeCompletedPanel() {
   DOM.completedPanel.classList.add('hidden');
   DOM.main.style.overflow = '';
-  if (completedScrim) completedScrim.classList.add('hidden');
+  if (completedScrim) {
+    completedScrim.classList.remove('completed-scrim--delete-mode', 'completed-scrim--hovered');
+    completedScrim.classList.add('hidden');
+  }
+  if (completedPanelTimer) {
+    clearInterval(completedPanelTimer);
+    completedPanelTimer = null;
+  }
 }
 
 DOM.completedBtn.addEventListener('click', openCompletedPanel);
@@ -579,6 +661,7 @@ function handleTaskComplete(e, li, id) {
 function handleUntick(li, id) {
   const task = tasks.find(t => t.id === id);
   if (!task) return;
+  if (isTaskLocked(task)) return;
   
   // Immediately disable to prevent double-tap
   li.style.pointerEvents = 'none';
@@ -1049,11 +1132,243 @@ function onPointerUp(e) {
 }
 
 
+// ══════════════════════════════════════════════════
+//  Completed Task Drag-to-Delete Outside Panel
+// ══════════════════════════════════════════════════
+
+let completedDrag = null;
+let potentialCompletedDrag = null;
+let completedLongPressTimeout = null;
+
+function onCompletedPointerDown(e) {
+  if (e.target.closest('.cb-hit') || e.target.closest('input') || completedDrag || drag) return;
+  const item = e.currentTarget;
+
+  item.setPointerCapture(e.pointerId);
+
+  potentialCompletedDrag = {
+    item,
+    pointerId: e.pointerId,
+    startX: e.clientX,
+    startY: e.clientY,
+    rect: item.getBoundingClientRect()
+  };
+
+  completedLongPressTimeout = setTimeout(() => {
+    if (!potentialCompletedDrag) return;
+    if (navigator.vibrate) navigator.vibrate(50);
+    startCompletedDrag(potentialCompletedDrag);
+  }, 100);
+
+  window.addEventListener('pointermove', onCompletedPointerMove);
+  window.addEventListener('pointerup',   onCompletedPointerUp);
+  window.addEventListener('pointercancel', onCompletedPointerUp);
+}
+
+function startCompletedDrag(pd) {
+  clearTimeout(completedLongPressTimeout);
+
+  const item = pd.item;
+  const rect = pd.rect;
+
+  // Placeholder in completedList (preserves scroll position and slot)
+  const ph = document.createElement('li');
+  ph.className = 'completed-drag-placeholder';
+  ph.style.height = rect.height + 'px';
+  ph.style.marginBottom = getComputedStyle(item).marginBottom;
+  item.parentNode.insertBefore(ph, item);
+
+  updateTrashZonePosition();
+
+  // Lift item
+  item.classList.add('completed-drag-active');
+  item.style.position = 'fixed';
+  item.style.width = rect.width + 'px';
+  item.style.left = rect.left + 'px';
+  item.style.top  = rect.top  + 'px';
+  item.style.margin = '0';
+  item.style.zIndex = '9500';
+  item.style.pointerEvents = 'none';
+  document.body.appendChild(item);
+
+  completedDrag = {
+    item,
+    ph,
+    pointerId: pd.pointerId,
+    ox: pd.startX - rect.left,
+    oy: pd.startY - rect.top,
+    isOutside: false,
+    startX: pd.startX,
+    startY: pd.startY,
+    clientX: pd.startX,
+    clientY: pd.startY
+  };
+
+  potentialCompletedDrag = null;
+
+  // Reveal red delete zone smoothly on the scrim outside completed panel
+  if (completedScrim) {
+    completedScrim.classList.add('completed-scrim--delete-mode');
+  }
+}
+
+function isPointerOutsideCompletedPanel(clientX) {
+  const panelWidth = DOM.completedPanel.offsetWidth || Math.min(380, window.innerWidth * 0.8);
+  const panelLeft = window.innerWidth - panelWidth;
+  return clientX < panelLeft;
+}
+
+function onCompletedPointerMove(e) {
+  if (potentialCompletedDrag && !completedDrag) {
+    const dx = e.clientX - potentialCompletedDrag.startX;
+    const dy = e.clientY - potentialCompletedDrag.startY;
+
+    if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+      clearTimeout(completedLongPressTimeout);
+
+      // If user drags horizontally towards the outside (leftwards)
+      if (dx < -8 && Math.abs(dx) > Math.abs(dy)) {
+        startCompletedDrag(potentialCompletedDrag);
+      } else if (Math.abs(dy) > Math.abs(dx)) {
+        // Vertical swipe: let list scroll natively
+        try { potentialCompletedDrag.item.releasePointerCapture(potentialCompletedDrag.pointerId); } catch(_) {}
+        potentialCompletedDrag = null;
+        window.removeEventListener('pointermove', onCompletedPointerMove);
+        window.removeEventListener('pointerup',   onCompletedPointerUp);
+        window.removeEventListener('pointercancel', onCompletedPointerUp);
+        return;
+      }
+    } else {
+      return;
+    }
+  }
+
+  if (!completedDrag) return;
+
+  const { item, ox, oy } = completedDrag;
+  completedDrag.clientX = e.clientX;
+  completedDrag.clientY = e.clientY;
+
+  item.style.left = (e.clientX - ox) + 'px';
+  item.style.top  = (e.clientY - oy) + 'px';
+
+  // Check if touch point reaches the red area outside the completed panel
+  const isOutside = isPointerOutsideCompletedPanel(e.clientX);
+
+  if (isOutside !== completedDrag.isOutside) {
+    completedDrag.isOutside = isOutside;
+    if (isOutside) {
+      if (completedScrim) completedScrim.classList.add('completed-scrim--hovered');
+      item.classList.add('completed-drag-item--shrink');
+    } else {
+      if (completedScrim) completedScrim.classList.remove('completed-scrim--hovered');
+      item.classList.remove('completed-drag-item--shrink');
+    }
+  }
+}
+
+function onCompletedPointerUp(e) {
+  if (potentialCompletedDrag && !completedDrag) {
+    clearTimeout(completedLongPressTimeout);
+    try { potentialCompletedDrag.item.releasePointerCapture(potentialCompletedDrag.pointerId); } catch(_) {}
+    potentialCompletedDrag = null;
+    window.removeEventListener('pointermove', onCompletedPointerMove);
+    window.removeEventListener('pointerup',   onCompletedPointerUp);
+    window.removeEventListener('pointercancel', onCompletedPointerUp);
+    return;
+  }
+
+  if (!completedDrag) return;
+  const { item, ph, pointerId } = completedDrag;
+  const isOutside = isPointerOutsideCompletedPanel(completedDrag.clientX);
+
+  try { item.releasePointerCapture(pointerId); } catch(_) {}
+
+  window.removeEventListener('pointermove', onCompletedPointerMove);
+  window.removeEventListener('pointerup',   onCompletedPointerUp);
+  window.removeEventListener('pointercancel', onCompletedPointerUp);
+
+  // Prevent scrim click closing the panel on drop
+  preventScrimClose = true;
+  setTimeout(() => { preventScrimClose = false; }, 200);
+
+  if (completedScrim) {
+    completedScrim.classList.remove('completed-scrim--delete-mode', 'completed-scrim--hovered');
+  }
+
+  if (isOutside) {
+    // Delete permanently!
+    if (navigator.vibrate) navigator.vibrate([40, 50, 40]);
+
+    item.style.transition = 'transform 0.28s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.24s ease';
+    item.style.transform = 'scale(0) rotate(-15deg)';
+    item.style.opacity = '0';
+
+    const startHeight = ph.offsetHeight;
+    ph.style.height = startHeight + 'px';
+    ph.style.transition = 'none';
+    ph.offsetHeight;
+
+    ph.style.transition = 'height 0.3s cubic-bezier(0.4, 0, 0.2, 1), margin-bottom 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease';
+    requestAnimationFrame(() => {
+      ph.style.height = '0px';
+      ph.style.marginBottom = '0px';
+      ph.style.opacity = '0';
+    });
+
+    const taskId = item.dataset.id;
+    ph.addEventListener('transitionend', function handler(te) {
+      if (te.propertyName !== 'height') return;
+      ph.removeEventListener('transitionend', handler);
+      ph.remove();
+      item.remove();
+
+      const task = tasks.find(t => t.id === taskId);
+      if (task) task._lastMutatedAt = Date.now();
+      tasks = tasks.filter(t => t.id !== taskId);
+      saveTasks();
+      if (db) db.from('tasks').delete().eq('id', taskId).then();
+      updateZebraStripes(DOM.completedList);
+      DOM.completedEmpty.style.display = DOM.completedList.children.length ? 'none' : 'block';
+    });
+
+    completedDrag = null;
+    return;
+  }
+
+  // Inside panel: fly item back into its slot smoothly
+  const pr = ph.getBoundingClientRect();
+  item.classList.remove('completed-drag-item--shrink');
+  item.style.transition = 'left 0.25s cubic-bezier(0.22, 1, 0.36, 1), top 0.25s cubic-bezier(0.22, 1, 0.36, 1), transform 0.25s cubic-bezier(0.22, 1, 0.36, 1)';
+  item.style.left = pr.left + 'px';
+  item.style.top  = pr.top  + 'px';
+  item.style.transform = 'scale(1)';
+
+  function settleCompleted() {
+    item.removeEventListener('transitionend', settleCompleted);
+    clearTimeout(fallback);
+
+    item.classList.remove('completed-drag-active', 'completed-drag-item--shrink');
+    item.style.cssText = '';
+    DOM.completedList.insertBefore(item, ph);
+    ph.remove();
+    updateZebraStripes(DOM.completedList);
+    completedDrag = null;
+  }
+
+  item.addEventListener('transitionend', settleCompleted, { once: true });
+  const fallback = setTimeout(settleCompleted, 300);
+}
+
+window.addEventListener('resize', () => {
+  if (completedScrim && !DOM.completedPanel.classList.contains('hidden')) {
+    updateTrashZonePosition();
+  }
+});
+
 // Prevent scrolling while dragging
 window.addEventListener('touchmove', (e) => {
-  if (drag) {
+  if (drag || completedDrag) {
     e.preventDefault();
   }
 }, { passive: false });
-
-// ── Init ──
