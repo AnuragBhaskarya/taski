@@ -1215,7 +1215,7 @@ function startCompletedDrag(pd) {
 }
 
 function isPointerOutsideCompletedPanel(clientX) {
-  const panelWidth = DOM.completedPanel.offsetWidth || Math.min(380, window.innerWidth * 0.8);
+  const panelWidth = DOM.completedPanel.offsetWidth || Math.min(380, window.innerWidth * 0.78);
   const panelLeft = window.innerWidth - panelWidth;
   return clientX < panelLeft;
 }
