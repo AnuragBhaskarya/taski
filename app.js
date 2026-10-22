@@ -281,8 +281,20 @@ function flipAnimate(elements, oldTops) {
 
 
 // ══════════════════════════════════
-//  Strict iOS Zoom Prevention
+//  Strict iOS Zoom & Selection Prevention
 // ══════════════════════════════════
+document.addEventListener('selectstart', (e) => {
+  if (!e.target.closest('input, textarea')) {
+    e.preventDefault();
+  }
+});
+
+document.addEventListener('contextmenu', (e) => {
+  if (!e.target.closest('input, textarea')) {
+    e.preventDefault();
+  }
+});
+
 let lastTouchTime = 0;
 document.addEventListener('touchstart', (e) => {
   if (e.touches.length > 1) {
