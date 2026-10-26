@@ -1,12 +1,12 @@
 // Taski Progressive Web App (PWA) Service Worker — Bulletproof Edition
-const CACHE_NAME = 'taski-pwa-v20';
+const CACHE_NAME = 'taski-pwa-v21';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
   '/styles.css',
-  '/styles.css?v=2.9',
+  '/styles.css?v=3.0',
   '/app.js',
-  '/app.js?v=2.9',
+  '/app.js?v=3.0',
   '/manifest.webmanifest',
   '/manifest.json',
   '/favicon.ico',

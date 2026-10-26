@@ -70,7 +70,7 @@ function updateHeaderDate() {
   if (!DOM.headerDate) return;
 
   const now = new Date();
-  DOM.headerDate.textContent = `${DAY_NAMES[now.getDay()]} · ${now.getDate()} ${MONTH_NAMES[now.getMonth()]}`;
+  DOM.headerDate.innerHTML = `<span class="header-date__day">${DAY_NAMES[now.getDay()]}</span>, ${now.getDate()} ${MONTH_NAMES[now.getMonth()]}`;
   DOM.headerDate.dateTime = formatCalendarDayKey(now);
   DOM.headerDate.title = now.toLocaleDateString(undefined, {
     weekday: 'long',

@@ -116,25 +116,33 @@ main::-webkit-scrollbar-thumb {
 
 .header-brand {
   display: flex;
-  flex-direction: column;
+  align-items: baseline;
+  gap: 10px;
   min-width: 0;
 }
 
 .header-title {
   font-size: 22px;
   font-weight: bold;
-  line-height: 1.08;
+  line-height: 1;
   color: var(--txt);
 }
 
 .header-date {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 10.5px;
   font-weight: 600;
-  line-height: 1.5;
-  letter-spacing: .11em;
-  text-transform: uppercase;
+  line-height: 1;
+  letter-spacing: .04em;
   white-space: nowrap;
+}
+
+.header-date__day {
+  color: var(--txt);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: .02em;
+  text-transform: uppercase;
 }
 
 .header-actions {
