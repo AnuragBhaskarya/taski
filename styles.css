@@ -662,6 +662,19 @@ main::-webkit-scrollbar-thumb {
   will-change: auto;
 }
 
+/* When a task is removed, the rows beneath hold their old offset for
+   a few milliseconds, then rise into the gap in sequence. Only the
+   browser's compositor work is involved after the initial layout. */
+@keyframes row-rise {
+  from { translate: 0 var(--rise-offset, 0px); }
+  to   { translate: 0 0; }
+}
+
+.row-rise {
+  animation: row-rise 0.36s cubic-bezier(0.22, 1, 0.36, 1) var(--rise-delay, 0ms) both;
+  will-change: translate;
+}
+
 .completed-date-header.completed-date-header--first {
   padding-top: 2px;
 }
@@ -674,6 +687,13 @@ main::-webkit-scrollbar-thumb {
     transform: none;
     transition: none !important;
     will-change: auto;
+  }
+
+  /* Keep the animation event (so cleanup runs) but make the rise
+     effectively instant for users who ask for less motion. */
+  .row-rise {
+    animation-duration: 0.01s;
+    animation-delay: 0s !important;
   }
 }
 

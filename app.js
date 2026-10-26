@@ -580,6 +580,149 @@ function flipAnimate(elements, oldTops) {
 }
 
 
+// ══════════════════════════════════════════════════
+//  Removal ripple
+//  Detached rows are animated by CSS; only rows that were visible
+//  get the stagger, so the work stays bounded by the viewport.
+// ══════════════════════════════════════════════════
+
+const RISE_STAGGER_MS = 24;
+const RISE_STAGGER_MAX_MS = 192;
+
+function currentTranslateY(el) {
+  const value = getComputedStyle(el).translate;
+  if (!value || value === 'none') return 0;
+  const y = parseFloat(value.split(' ')[1] || '0');
+  return Number.isFinite(y) ? y : 0;
+}
+
+function applyRowRise(moves) {
+  const live = moves.filter(move => move.el.isConnected);
+  if (!live.length) return;
+  live.sort((a, b) => a.order - b.order);
+
+  // Read any in-flight offsets before writing classes. If a second task
+  // is removed during a ripple, rows continue from where they are.
+  for (let i = 0; i < live.length; i++) {
+    const move = live[i];
+    move.carried = move.el.classList.contains('row-rise')
+      ? currentTranslateY(move.el)
+      : 0;
+  }
+
+  for (let i = 0; i < live.length; i++) {
+    const move = live[i];
+    const el = move.el;
+    const offset = Math.max(0, move.delta + move.carried);
+    el.classList.remove('row-rise');
+    el.style.setProperty('--rise-offset', `${offset.toFixed(2)}px`);
+    el.style.setProperty('--rise-delay', `${Math.min(i * RISE_STAGGER_MS, RISE_STAGGER_MAX_MS)}ms`);
+  }
+
+  // Resolve the held starting positions, then let CSS take over.
+  void document.body.offsetWidth;
+  for (let i = 0; i < live.length; i++) {
+    live[i].el.classList.add('row-rise');
+  }
+}
+
+document.addEventListener('animationend', (e) => {
+  if (e.animationName !== 'row-rise') return;
+  const el = e.target;
+  if (!el || !el.classList || !el.classList.contains('row-rise')) return;
+  el.classList.remove('row-rise');
+  el.style.removeProperty('--rise-offset');
+  el.style.removeProperty('--rise-delay');
+});
+
+function captureActiveRiseBelow(anchorEl) {
+  const { viewTop, viewBottom } = getActiveViewport();
+  const anchorTop = anchorEl.offsetTop;
+  const items = [];
+
+  for (const card of activeCards) {
+    if (card.el === anchorEl) continue;
+    if (card.el.offsetTop <= anchorTop) continue;
+    if (card.bottom <= viewTop || card.top >= viewBottom) continue;
+    items.push({ el: card.el, oldTop: card.top });
+  }
+
+  return items;
+}
+
+function applyActiveRise(items) {
+  if (!items.length) return;
+  const moves = [];
+
+  for (const item of items) {
+    const el = item.el;
+    if (!el.isConnected) continue;
+    const card = el.__activeCard;
+    if (!card) continue;
+    const delta = item.oldTop - card.top;
+    if (delta <= 0.5) continue;
+
+    // A drag spring may still own this row's translate; release it so
+    // the CSS ripple can finish without snapping back.
+    const s = springs.get(el);
+    if (s) {
+      s.y = 0;
+      s.vy = 0;
+      s.target = 0;
+      s.onUpdate = null;
+      s.onComplete = null;
+    }
+    alive.delete(el);
+    el.style.translate = '';
+
+    moves.push({ el, delta, order: card.top });
+  }
+
+  applyRowRise(moves);
+}
+
+function animateCardAway(el, transform = 'translateX(-50%) scale(0.85)') {
+  const rect = el.getBoundingClientRect();
+
+  el.style.position = 'fixed';
+  el.style.left = `${rect.left}px`;
+  el.style.top = `${rect.top}px`;
+  el.style.width = `${rect.width}px`;
+  el.style.height = `${rect.height}px`;
+  el.style.margin = '0';
+  el.style.zIndex = '9600';
+  el.style.pointerEvents = 'none';
+  el.style.transform = 'none';
+  el.style.opacity = '1';
+  el.style.willChange = 'transform, opacity';
+  document.body.appendChild(el);
+
+  void el.offsetWidth;
+  el.style.transition = 'transform 0.28s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.24s ease';
+  el.style.transform = transform;
+  el.style.opacity = '0';
+  setTimeout(() => el.remove(), 320);
+}
+
+function animateDetachedCard(el, transform = 'scale(0) rotate(-15deg)') {
+  el.style.transition = 'transform 0.28s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.24s ease';
+  el.style.willChange = 'transform, opacity';
+  void el.offsetWidth;
+  el.style.transform = transform;
+  el.style.opacity = '0';
+  setTimeout(() => el.remove(), 320);
+}
+
+function detachActiveCard(el) {
+  if (el.__activeRevealTimer) {
+    clearTimeout(el.__activeRevealTimer);
+    el.__activeRevealTimer = null;
+  }
+  activeRevealed.delete(el);
+  el.__activeCard = null;
+}
+
+
 // ══════════════════════════════════
 //  Strict iOS Zoom & Selection Prevention
 // ══════════════════════════════════
@@ -919,6 +1062,34 @@ class CompletedVirtualizer {
     }
   }
 
+  flushRowRise(oldRise) {
+    if (!oldRise || !oldRise.size) return;
+
+    // Map rebuilt task rows by id. All rows are fresh elements now, so
+    // the starting offset must come from the captured visual position.
+    const rows = new Map();
+    for (const [idx, el] of this.mounted) {
+      const item = this.items[idx];
+      if (!item || item.type !== 'task') continue;
+      if (!el.isConnected || el.parentNode !== this.container) continue;
+      rows.set(item.task.id, {
+        el,
+        top: this.offsets[idx] - this.container.scrollTop
+      });
+    }
+
+    const moves = [];
+    for (const [id, old] of oldRise) {
+      const row = rows.get(id);
+      if (!row) continue;
+      const delta = old.top - row.top;
+      if (delta <= 0.5) continue;
+      moves.push({ el: row.el, delta, order: row.top });
+    }
+
+    applyRowRise(moves);
+  }
+
   measureMetrics() {
     const width = this.container.clientWidth;
     if (width <= 0) {
@@ -1037,7 +1208,7 @@ class CompletedVirtualizer {
     this.totalHeight = total;
   }
 
-  setItems(items, { animateInitial = false, resetScroll = false } = {}) {
+  setItems(items, { animateInitial = false, resetScroll = false, riseFromId = null } = {}) {
     const oldScrollTop = this.container.scrollTop;
 
     // Remember the stripe each mounted task had before the rebuild.
@@ -1055,6 +1226,40 @@ class CompletedVirtualizer {
     }
     this.previousStripes = previousStripes.size ? previousStripes : null;
     this.pendingStripes = [];
+
+    // Capture the visible rows below a removed task so they can be
+    // held at their old offsets and released upward after the rebuild.
+    let oldRise = null;
+    if (riseFromId) {
+      let removedIndex = -1;
+      for (let i = 0; i < this.items.length; i++) {
+        const item = this.items[i];
+        if (item.type === 'task' && item.task.id === riseFromId) {
+          removedIndex = i;
+          break;
+        }
+      }
+
+      if (removedIndex >= 0) {
+        const viewTop = this.container.scrollTop;
+        const viewBottom = viewTop + this.container.clientHeight;
+        oldRise = new Map();
+        for (const [idx, el] of this.mounted) {
+          if (idx <= removedIndex) continue;
+          const oldItem = this.items[idx];
+          if (!oldItem || oldItem.type !== 'task') continue;
+          if (!el.isConnected || el.parentNode !== this.container) continue;
+          const top = this.offsets[idx];
+          const bottom = top + this.heights[idx];
+          if (bottom <= viewTop || top >= viewBottom) continue;
+          // Store the on-screen offset (and any in-flight ripple) so
+          // the rebuilt row can continue from exactly where it is.
+          oldRise.set(oldItem.task.id, {
+            top: top - oldScrollTop + currentTranslateY(el)
+          });
+        }
+      }
+    }
 
     this.items = items;
 
@@ -1096,6 +1301,7 @@ class CompletedVirtualizer {
 
     this.updateWindow(true, animateInitial);
     this.flushStripeTransitions();
+    this.flushRowRise(oldRise);
   }
 
   getVisibleRange(scrollTop, viewportHeight) {
@@ -1357,7 +1563,7 @@ function getCompletedVirtualizer() {
   return completedVirtualizer;
 }
 
-function renderCompletedTasks({ animate = false, resetScroll = false } = {}) {
+function renderCompletedTasks({ animate = false, resetScroll = false, riseFromId = null } = {}) {
   // The panel is closed: no DOM work is needed until it opens.
   if (DOM.completedPanel.classList.contains('hidden') && !animate) return;
   if (completedDrag) return;
@@ -1385,7 +1591,8 @@ function renderCompletedTasks({ animate = false, resetScroll = false } = {}) {
   const virtualizer = getCompletedVirtualizer();
   virtualizer.setItems(buildCompletedItems(completed), {
     animateInitial: animate,
-    resetScroll
+    resetScroll,
+    riseFromId
   });
 }
 
@@ -1571,18 +1778,31 @@ function handleTaskComplete(e, li, id) {
   spawnFlash(li);
   spawnRipple(li, cb);
 
-  // After celebration: slide & collapse
+  // After the celebration: detach the card from the flow, let it fall
+  // away, and ripple the visible rows below into the freed slot.
   setTimeout(() => {
     li.classList.remove('topic-item--celebrate');
-    li.style.pointerEvents = 'none';
-    li.style.overflow = 'hidden';
-    
-    // Measure height FIRST before toggling zebra stripes to avoid thrashing
-    const h = li.offsetHeight;
-    li.style.height = h + 'px';
-    
+
+    // The completed styling expanded this card's time block, so the
+    // cached card offsets are now stale. Refresh them before capture
+    // or the rows below would jump up by the grown amount.
+    rebuildActiveGeometry();
+
+    const rise = captureActiveRiseBelow(li);
+    const scrollTop = DOM.main.scrollTop;
+
+    detachActiveCard(li);
+    animateCardAway(li);
+
+    // Undo any scroll anchoring caused by the instant detach.
+    DOM.main.scrollTop = scrollTop;
+
     updateZebraStripes(DOM.taskList);
-    
+    rebuildActiveGeometry();
+    scheduleActiveReveal();
+    applyActiveRise(rise);
+    renderCompletedTasks();
+
     setTimeout(() => {
       DOM.completedBtn.classList.remove('header-icon-btn--flash');
       requestAnimationFrame(() => {
@@ -1592,32 +1812,6 @@ function handleTaskComplete(e, li, id) {
         }, { once: true });
       });
     }, 80);
-    
-    // Double-rAF batching: set transition in frame 1, animate in frame 2
-    requestAnimationFrame(() => {
-      li.style.transition = 'transform 0.25s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s ease-out, height 0.25s cubic-bezier(0.22, 1, 0.36, 1), margin-bottom 0.25s cubic-bezier(0.22, 1, 0.36, 1), padding 0.25s cubic-bezier(0.22, 1, 0.36, 1), border-width 0.2s ease-out, background 0.2s, border-color 0.2s';
-      
-      requestAnimationFrame(() => {
-        li.style.transform = 'translateX(-50%) scale(0.85)';
-        li.style.opacity = '0';
-        li.style.height = '0px';
-        li.style.marginBottom = '0px';
-        li.style.paddingTop = '0px';
-        li.style.paddingBottom = '0px';
-        li.style.borderWidth = '0px';
-        li.style.background = 'rgba(42, 156, 115, 0.5)';
-        li.style.borderColor = 'rgba(42, 156, 115, 0.5)';
-      });
-    });
-    
-    li.addEventListener('transitionend', function handler(e) {
-      if (e.propertyName !== 'height') return;
-      li.removeEventListener('transitionend', handler);
-      li.remove();
-      rebuildActiveGeometry();
-      scheduleActiveReveal();
-      renderCompletedTasks();
-    });
   }, 80);
 }
 
@@ -1642,55 +1836,23 @@ function handleUntick(li, id) {
   saveTasks();
   if (db) db.from('tasks').update({ completed: false, completedAt: null, position: task.position }).eq('id', task.id).then();
 
-  // Immediate CSS collapse — no forced reflow needed if we use rAF
-  li.style.overflow = 'hidden';
-  const h = li.offsetHeight;
-  li.style.height = h + 'px';
-  
-  // Use double-rAF to batch: set height in frame 1, animate in frame 2
-  requestAnimationFrame(() => {
-    li.style.transition = 'transform 0.25s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s ease-out, height 0.25s cubic-bezier(0.22, 1, 0.36, 1), margin-bottom 0.25s cubic-bezier(0.22, 1, 0.36, 1), padding 0.25s cubic-bezier(0.22, 1, 0.36, 1), border-width 0.2s ease-out';
-    
-    requestAnimationFrame(() => {
-      li.style.transform = 'translateX(50%) scale(0.85)';
-      li.style.opacity = '0';
-      li.style.height = '0px';
-      li.style.marginBottom = '0px';
-      li.style.paddingTop = '0px';
-      li.style.paddingBottom = '0px';
-      li.style.borderWidth = '0px';
-    });
-  });
-  
-  let finalized = false;
-  function finalizeUntick() {
-    if (finalized) return;
-    finalized = true;
-    li.remove();
-    li.removeEventListener('transitionend', onUntickTransitionEnd);
-    clearTimeout(untickFallback);
+  // Lift the row out of the completed list, then ripple the rows below
+  // upward while the removed row drifts away.
+  animateCardAway(li, 'translateX(50%) scale(0.85)');
 
-    // Rebuild the virtual list (also removes an empty date header)
-    renderCompletedTasks();
+  // Rebuild the virtual list (also removes an empty date header) and
+  // stagger the visible rows beneath the removed task.
+  renderCompletedTasks({ riseFromId: id });
 
-    // Add back to main list. This is not a first-entrance reveal, so
-    // keep it instant and let the existing return animation play.
-    const newEl = createTaskElement(task);
-    revealActiveTaskNow(newEl, task.id);
-    newEl.classList.add('card--animate-in');
-    DOM.taskList.appendChild(newEl);
-    rebuildActiveGeometry();
-    scheduleActiveReveal();
-    updateZebraStripes(DOM.taskList);
-  }
-
-  function onUntickTransitionEnd(e) {
-    if (e.propertyName !== 'height') return;
-    finalizeUntick();
-  }
-
-  li.addEventListener('transitionend', onUntickTransitionEnd);
-  const untickFallback = setTimeout(finalizeUntick, 350);
+  // Add back to main list. This is not a first-entrance reveal, so
+  // keep it instant and let the existing return animation play.
+  const newEl = createTaskElement(task);
+  revealActiveTaskNow(newEl, task.id);
+  newEl.classList.add('card--animate-in');
+  DOM.taskList.appendChild(newEl);
+  rebuildActiveGeometry();
+  scheduleActiveReveal();
+  updateZebraStripes(DOM.taskList);
 }
 
 
@@ -2028,39 +2190,26 @@ function onPointerUp(e) {
   document.body.classList.remove('is-dragging');
 
   if (drag.isDeleting) {
-    // Delete animation
-    item.style.transform = 'scale(0) rotate(-15deg)';
-    item.style.opacity = '0';
-    
-    // Collapse placeholder using CSS transition
-    const startHeight = ph.offsetHeight;
-    ph.style.height = startHeight + 'px';
-    ph.style.transition = 'none';
-    ph.offsetHeight; // single reflow
-    
-    ph.style.transition = 'height 0.35s cubic-bezier(0.4, 0, 0.2, 1), margin-bottom 0.35s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1)';
-    
-    requestAnimationFrame(() => {
-      ph.style.height = '0px';
-      ph.style.marginBottom = '0px';
-      ph.style.opacity = '0';
-    });
-    
-    ph.addEventListener('transitionend', function handler(e) {
-      if (e.propertyName !== 'height') return;
-      ph.removeEventListener('transitionend', handler);
-      ph.remove();
-      item.remove();
-      const task = tasks.find(t => t.id === item.dataset.id);
-      if (task) task._lastMutatedAt = Date.now();
-      tasks = tasks.filter(t => t.id !== item.dataset.id);
-      saveTasks(); // instant cache
-      if (db) db.from('tasks').delete().eq('id', item.dataset.id).then();
-      rebuildActiveGeometry();
-      scheduleActiveReveal();
-      updateZebraStripes(DOM.taskList);
-    });
-    
+    // Capture the visible rows below the placeholder before the slot
+    // disappears, then release them in a CSS ripple.
+    const rise = captureActiveRiseBelow(ph);
+    const scrollTop = DOM.main.scrollTop;
+
+    animateDetachedCard(item);
+    ph.remove();
+
+    const task = tasks.find(t => t.id === item.dataset.id);
+    if (task) task._lastMutatedAt = Date.now();
+    tasks = tasks.filter(t => t.id !== item.dataset.id);
+    saveTasks(); // instant cache
+    if (db) db.from('tasks').delete().eq('id', item.dataset.id).then();
+
+    DOM.main.scrollTop = scrollTop;
+    rebuildActiveGeometry();
+    scheduleActiveReveal();
+    updateZebraStripes(DOM.taskList);
+    applyActiveRise(rise);
+
     drag = null;
     return;
   }
@@ -2296,47 +2445,21 @@ function onCompletedPointerUp(e) {
     // Delete permanently!
     if (navigator.vibrate) navigator.vibrate([40, 50, 40]);
 
-    item.style.transition = 'transform 0.28s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.24s ease';
-    item.style.transform = 'scale(0) rotate(-15deg)';
-    item.style.opacity = '0';
-
-    const startHeight = ph.offsetHeight;
-    ph.style.height = startHeight + 'px';
-    ph.style.transition = 'none';
-    ph.offsetHeight;
-
-    ph.style.transition = 'height 0.3s cubic-bezier(0.4, 0, 0.2, 1), margin-bottom 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.25s ease';
-    requestAnimationFrame(() => {
-      ph.style.height = '0px';
-      ph.style.marginBottom = '0px';
-      ph.style.opacity = '0';
-    });
-
     const taskId = item.dataset.id;
-    let finalized = false;
-    function finalizeDelete(te) {
-      if (finalized) return;
-      if (te && te.propertyName !== 'height') return;
-      finalized = true;
-      ph.removeEventListener('transitionend', finalizeDelete);
-      clearTimeout(deleteFallback);
 
-      ph.remove();
-      item.remove();
-
-      const task = tasks.find(t => t.id === taskId);
-      if (task) task._lastMutatedAt = Date.now();
-      tasks = tasks.filter(t => t.id !== taskId);
-      saveTasks();
-      if (db) db.from('tasks').delete().eq('id', taskId).then();
-
-      renderCompletedTasks();
-    }
-
-    ph.addEventListener('transitionend', finalizeDelete);
-    const deleteFallback = setTimeout(finalizeDelete, 350);
-
+    // Drop the row out of the completed list and rebuild it right away.
+    // The virtualizer replays a CSS ripple on the visible rows below.
+    animateDetachedCard(item);
+    ph.remove();
     completedDrag = null;
+
+    const task = tasks.find(t => t.id === taskId);
+    if (task) task._lastMutatedAt = Date.now();
+    tasks = tasks.filter(t => t.id !== taskId);
+    saveTasks();
+    if (db) db.from('tasks').delete().eq('id', taskId).then();
+
+    renderCompletedTasks({ riseFromId: taskId });
     return;
   }
 
