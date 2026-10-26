@@ -96,22 +96,26 @@ let tasks = JSON.parse(localStorage.getItem('taski_tasks') || '[]');
 // Instant Paint! Render cache immediately before any network requests
 if (tasks.length > 0) {
   renderActiveTasks();
-  renderCompletedTasks();
 }
 
 let renderBatchTimer = null;
 let pendingRemoteRender = false;
+let completedDrag = null;
 
 function scheduleRender() {
   if (renderBatchTimer) return;
   
-  if (document.body.classList.contains('is-dragging')) {
+  if (document.body.classList.contains('is-dragging') || completedDrag) {
     pendingRemoteRender = true;
     return;
   }
   
   renderBatchTimer = requestAnimationFrame(() => {
     renderBatchTimer = null;
+    if (document.body.classList.contains('is-dragging') || completedDrag) {
+      pendingRemoteRender = true;
+      return;
+    }
     pendingRemoteRender = false;
     
     tasks.sort((a, b) => {
@@ -461,22 +465,616 @@ function renderActiveTasks() {
   updateZebraStripes(DOM.taskList);
 }
 
-function renderCompletedTasks() {
-  DOM.completedList.innerHTML = '';
-  const completed = tasks.filter(t => t.completed).sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
+// ══════════════════════════════════════════════════════════════════
+//  Completed List — O(viewport) virtualizer with content-aware heights
+//  Only the rows near the viewport exist in the DOM. Heights are
+//  estimated from the real wrapped title width, then corrected by
+//  measuring mounted rows. This keeps 10k+ completed tasks smooth and
+//  keeps memory flat (off-screen rows are detached and released).
+// ══════════════════════════════════════════════════════════════════
+
+const COMPLETED_OVERSCAN = 320;   // px mounted above/below the viewport
+const COMPLETED_REVEAL_EDGE = 45; // px lookahead that kicks the reveal
+const COMPLETED_STAGGER = 35;
+const COMPLETED_STAGGER_MAX = 140;
+
+let completedVirtualizer = null;
+let lastCompletedSignature = '';
+let completedTextCtx = null;
+let completedMeasureFont = null;
+let completedMeasureSpacing = null;
+
+function getCompletedTextContext() {
+  if (!completedTextCtx) {
+    completedTextCtx = document.createElement('canvas').getContext('2d');
+  }
+  return completedTextCtx;
+}
+
+// Split text into the same break opportunities the browser uses for
+// normal wrapping: whitespace and hyphens/slashes. Long words still
+// overflow on one line (CSS default), which this mirrors.
+function getWrapTokens(text) {
+  const tokens = [];
+  let chunk = '';
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r') {
+      if (chunk) { tokens.push(chunk); chunk = ''; }
+      tokens.push(' ');
+    } else {
+      chunk += ch;
+      if (ch === '-' || ch === '/' || ch === '—' || ch === '–' ||
+          (ch >= '\u2E80' && ch <= '\u9FFF') ||
+          (ch >= '\u3040' && ch <= '\u30FF') ||
+          (ch >= '\uAC00' && ch <= '\uD7AF')) {
+        tokens.push(chunk);
+        chunk = '';
+      }
+    }
+  }
+  if (chunk) tokens.push(chunk);
+  return tokens;
+}
+
+function countWrappedLines(text, maxWidth, font, letterSpacing) {
+  if (!text) return 1;
+  if (!(maxWidth > 0)) return 1;
+
+  const ctx = getCompletedTextContext();
+  if (!ctx) return Math.max(1, Math.ceil((text.length * 8) / maxWidth));
+
+  // Font parsing is expensive; this context is reused for every title
+  // in the list, so only touch it when the typography actually changes.
+  if (completedMeasureFont !== font) {
+    ctx.font = font;
+    completedMeasureFont = font;
+  }
+  const supportsLetterSpacing = 'letterSpacing' in ctx;
+  if (supportsLetterSpacing && completedMeasureSpacing !== letterSpacing) {
+    ctx.letterSpacing = `${letterSpacing}px`;
+    completedMeasureSpacing = letterSpacing;
+  }
+  const spacingPerChar = supportsLetterSpacing ? 0 : letterSpacing;
+
+  // Fast path: the overwhelming majority of titles fit on one line.
+  const fullWidth = ctx.measureText(text).width + spacingPerChar * text.length;
+  if (fullWidth <= maxWidth + 0.5) return 1;
+
+  const measure = (str) => ctx.measureText(str).width;
+
+  const tokens = getWrapTokens(text);
+  const spaceWidth = measure(' ') + spacingPerChar * 2;
+  let lines = 1;
+  let lineWidth = 0;
+
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token === ' ') {
+      if (lineWidth > 0) lineWidth += spaceWidth;
+      continue;
+    }
+
+    const width = measure(token) + spacingPerChar * token.length;
+
+    if (lineWidth === 0) {
+      lineWidth = width;
+    } else if (lineWidth + width <= maxWidth + 0.5) {
+      lineWidth += width;
+    } else {
+      lines++;
+      lineWidth = width;
+    }
+  }
+
+  return lines;
+}
+
+function buildCompletedItems(completed) {
+  const items = [];
   let lastDateKey = null;
-  completed.forEach(t => {
-    const dateKey = getTaskDateKey(t.completedAt);
+  let ordinal = 0;
+  const totalTasks = completed.length;
+
+  for (let i = 0; i < totalTasks; i++) {
+    const task = completed[i];
+    const dateKey = getTaskDateKey(task.completedAt);
+
     if (dateKey !== lastDateKey) {
       lastDateKey = dateKey;
-      DOM.completedList.appendChild(createDateHeaderElement(t.completedAt));
+      items.push({
+        type: 'header',
+        key: `h:${dateKey}:${items.length === 0 ? 'first' : 'normal'}`,
+        timestamp: task.completedAt,
+        isFirst: items.length === 0
+      });
     }
-    const el = createTaskElement(t, true);
-    el.classList.remove('card--animate-in');
-    DOM.completedList.appendChild(el);
-  });
-  updateZebraStripes(DOM.completedList);
+
+    items.push({
+      type: 'task',
+      key: `t:${task.id}:${task.title.length}:${i === totalTasks - 1 ? 'L' : 'M'}`,
+      task,
+      ordinal,
+      isLast: i === totalTasks - 1
+    });
+    ordinal++;
+  }
+
+  return items;
+}
+
+class CompletedVirtualizer {
+  constructor(container) {
+    this.container = container;
+    this.items = [];
+    this.heights = new Float64Array(0);
+    this.offsets = new Float64Array(1);
+    this.totalHeight = 0;
+    this.mounted = new Map();
+    this.heightCache = new Map();
+    this.metrics = null;
+    this.metricsWidth = -1;
+
+    this.topSpacer = document.createElement('li');
+    this.topSpacer.className = 'completed-spacer';
+    this.bottomSpacer = document.createElement('li');
+    this.bottomSpacer.className = 'completed-spacer';
+
+    this.scrollRaf = 0;
+    this.resizeRaf = 0;
+
+    this.onScroll = this.onScroll.bind(this);
+    container.addEventListener('scroll', this.onScroll, { passive: true });
+
+    this.resizeObserver = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(() => {
+        if (this.resizeRaf) return;
+        this.resizeRaf = requestAnimationFrame(() => {
+          this.resizeRaf = 0;
+          if (!this.items.length) return;
+          if (this.container.clientWidth === this.metricsWidth) return;
+          this.invalidateLayout();
+        });
+      })
+      : null;
+    if (this.resizeObserver) this.resizeObserver.observe(container);
+  }
+
+  onScroll() {
+    if (this.scrollRaf) return;
+    this.scrollRaf = requestAnimationFrame(() => {
+      this.scrollRaf = 0;
+      this.updateWindow(false, false);
+    });
+  }
+
+  renderItem(item) {
+    if (item.type === 'header') {
+      const el = createDateHeaderElement(item.timestamp);
+      if (item.isFirst) el.classList.add('completed-date-header--first');
+      return el;
+    }
+
+    const el = createTaskElement(item.task, true);
+    el.classList.add(item.ordinal % 2 === 0 ? 'is-odd' : 'is-even');
+    if (item.isLast) el.classList.add('is-last');
+    return el;
+  }
+
+  measureMetrics() {
+    const width = this.container.clientWidth;
+    if (width <= 0) {
+      this.metrics = null;
+      return;
+    }
+
+    const containerStyle = getComputedStyle(this.container);
+    const padLeft = parseFloat(containerStyle.paddingLeft) || 0;
+    const padRight = parseFloat(containerStyle.paddingRight) || 0;
+
+    // Absolute probes live inside the real list, so they inherit the
+    // exact fonts, wrapping width, borders, padding and theme.
+    const probe = document.createElement('li');
+    probe.className = 'topic-item topic-item--complete';
+    probe.style.cssText = `position:absolute;left:${padLeft}px;right:${padRight}px;top:0;visibility:hidden;pointer-events:none;z-index:-1;`;
+    probe.innerHTML = `
+      <label class="cb-hit"><input type="checkbox" class="topic-item__checkbox" checked></label>
+      <div class="task-content">
+        <div class="task-title">M</div>
+        <div class="task-time">12:00 PM</div>
+      </div>
+    `;
+
+    const headerProbe = document.createElement('li');
+    headerProbe.className = 'completed-date-header';
+    headerProbe.textContent = 'Today · 26 Oct, 2026';
+    headerProbe.style.cssText = `position:absolute;left:${padLeft}px;right:${padRight}px;top:0;visibility:hidden;pointer-events:none;z-index:-1;`;
+
+    // Keep probes before the bottom spacer so :last-child does not
+    // strip the real card margin.
+    this.container.insertBefore(probe, this.bottomSpacer);
+    this.container.insertBefore(headerProbe, this.bottomSpacer);
+
+    const titleEl = probe.querySelector('.task-title');
+    const contentEl = probe.querySelector('.task-content');
+    const timeEl = probe.querySelector('.task-time');
+    const titleStyle = getComputedStyle(titleEl);
+    const timeStyle = getComputedStyle(timeEl);
+
+    const font = `${titleStyle.fontStyle} ${titleStyle.fontWeight} ${titleStyle.fontSize} ${titleStyle.fontFamily}`;
+    const fontSize = parseFloat(titleStyle.fontSize) || 16;
+    const lineHeight = parseFloat(titleStyle.lineHeight) || fontSize * 1.35;
+    const letterSpacing = titleStyle.letterSpacing === 'normal'
+      ? 0
+      : (parseFloat(titleStyle.letterSpacing) || 0);
+
+    const cardBase = probe.offsetHeight;
+    const timeBlock = timeEl.offsetHeight > 0
+      ? timeEl.offsetHeight + (parseFloat(timeStyle.marginTop) || 0)
+      : 0;
+    const marginBottom = parseFloat(getComputedStyle(probe).marginBottom) || 0;
+    const titleWidth = contentEl.clientWidth;
+
+    const headerHeight = headerProbe.offsetHeight;
+    headerProbe.style.paddingTop = '2px';
+    const firstHeaderHeight = headerProbe.offsetHeight;
+
+    probe.remove();
+    headerProbe.remove();
+
+    this.metrics = {
+      cardBase,
+      titleWidth,
+      lineHeight,
+      letterSpacing,
+      font,
+      timeBlock,
+      marginBottom,
+      headerHeight,
+      firstHeaderHeight
+    };
+    this.metricsWidth = width;
+  }
+
+  estimateHeight(item) {
+    const metrics = this.metrics;
+    if (!metrics) return item.type === 'header' ? 40 : 86;
+
+    if (item.type === 'header') {
+      return item.isFirst ? metrics.firstHeaderHeight : metrics.headerHeight;
+    }
+
+    const lines = countWrappedLines(
+      item.task.title || '',
+      metrics.titleWidth,
+      metrics.font,
+      metrics.letterSpacing
+    );
+
+    let height = metrics.cardBase + Math.max(0, lines - 1) * metrics.lineHeight;
+    if (!item.task.completedAt) height -= metrics.timeBlock;
+    if (!item.isLast) height += metrics.marginBottom;
+    return height;
+  }
+
+  heightFor(item) {
+    let height = this.heightCache.get(item.key);
+    if (height === undefined) {
+      height = this.estimateHeight(item);
+      this.heightCache.set(item.key, height);
+    }
+    return height;
+  }
+
+  rebuildOffsets(fromIndex) {
+    const count = this.items.length;
+    let total = fromIndex > 0 ? this.offsets[fromIndex] : 0;
+
+    for (let i = fromIndex; i < count; i++) {
+      this.offsets[i] = total;
+      total += this.heights[i];
+    }
+
+    this.offsets[count] = total;
+    this.totalHeight = total;
+  }
+
+  setItems(items, { animateInitial = false, resetScroll = false } = {}) {
+    const oldScrollTop = this.container.scrollTop;
+
+    this.items = items;
+
+    const liveKeys = new Set(items.map(item => item.key));
+    for (const key of this.heightCache.keys()) {
+      if (!liveKeys.has(key)) this.heightCache.delete(key);
+    }
+
+    // Drop every mounted row (and its event listeners) before rebuilding.
+    this.mounted.clear();
+    this.container.replaceChildren(this.topSpacer, this.bottomSpacer);
+
+    // Reserve a rough height first so the container's scrollbar state
+    // (and therefore the measured card width) matches the final list.
+    this.setSpacer(this.topSpacer, 0);
+    this.setSpacer(this.bottomSpacer, items.length * 96);
+
+    if (this.container.clientWidth !== this.metricsWidth) {
+      this.metrics = null;
+      this.metricsWidth = this.container.clientWidth;
+      this.heightCache.clear();
+    }
+    if (!this.metrics) this.measureMetrics();
+
+    const count = items.length;
+    this.heights = new Float64Array(count);
+    this.offsets = new Float64Array(count + 1);
+    for (let i = 0; i < count; i++) {
+      this.heights[i] = this.heightFor(items[i]);
+    }
+    this.rebuildOffsets(0);
+
+    this.setSpacer(this.topSpacer, 0);
+    this.setSpacer(this.bottomSpacer, this.totalHeight);
+
+    this.container.scrollTop = resetScroll
+      ? 0
+      : Math.min(oldScrollTop, Math.max(0, this.container.scrollHeight - this.container.clientHeight));
+
+    this.updateWindow(true, animateInitial);
+  }
+
+  getVisibleRange(scrollTop, viewportHeight) {
+    const minY = Math.max(0, scrollTop - COMPLETED_OVERSCAN);
+    const maxY = scrollTop + viewportHeight + COMPLETED_OVERSCAN;
+    const count = this.items.length;
+
+    let low = 0;
+    let high = count - 1;
+    let startIndex = 0;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (this.offsets[mid + 1] > minY) {
+        startIndex = mid;
+        high = mid - 1;
+      } else {
+        low = mid + 1;
+      }
+    }
+
+    low = startIndex;
+    high = count - 1;
+    let endIndex = startIndex;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (this.offsets[mid] < maxY) {
+        endIndex = mid;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+
+    if (endIndex < startIndex) endIndex = startIndex;
+    return { startIndex, endIndex };
+  }
+
+  setSpacer(spacer, height) {
+    if (height > 0.5) {
+      spacer.style.display = 'block';
+      spacer.style.height = `${height}px`;
+    } else {
+      spacer.style.display = 'none';
+      spacer.style.height = '0px';
+    }
+  }
+
+  measureMountedRows(rows) {
+    const previousScroll = this.container.scrollTop;
+    let scrollShift = 0;
+    let firstChanged = this.items.length;
+
+    for (let i = 0; i < rows.length; i++) {
+      const idx = rows[i][0];
+      const el = rows[i][1];
+      const margin = el.classList.contains('completed-date-header')
+        ? 0
+        : (el.classList.contains('is-last') ? 0 : (this.metrics?.marginBottom || 0));
+      const actual = el.offsetHeight + margin;
+      const previous = this.heights[idx];
+
+      if (Math.abs(actual - previous) > 0.5) {
+        if (this.offsets[idx] < previousScroll - 0.5) {
+          scrollShift += actual - previous;
+        }
+        this.heights[idx] = actual;
+        this.heightCache.set(this.items[idx].key, actual);
+        if (idx < firstChanged) firstChanged = idx;
+      }
+    }
+
+    if (firstChanged < this.items.length) {
+      this.rebuildOffsets(firstChanged);
+      if (scrollShift) {
+        this.container.scrollTop = Math.max(0, previousScroll + scrollShift);
+      }
+    }
+
+    return scrollShift;
+  }
+
+  updateWindow(isInitial = false, animateInitial = false, depth = 0) {
+    const count = this.items.length;
+    if (!count) {
+      this.setSpacer(this.topSpacer, 0);
+      this.setSpacer(this.bottomSpacer, 0);
+      return;
+    }
+
+    const viewportHeight = this.container.clientHeight || 520;
+    let scrollTop = this.container.scrollTop;
+    let { startIndex, endIndex } = this.getVisibleRange(scrollTop, viewportHeight);
+
+    for (const [idx, el] of this.mounted) {
+      if (idx < startIndex || idx > endIndex) {
+        el.remove();
+        this.mounted.delete(idx);
+      }
+    }
+
+    const newRows = [];
+    for (let idx = startIndex; idx <= endIndex; idx++) {
+      if (this.mounted.has(idx)) continue;
+
+      const el = this.renderItem(this.items[idx]);
+
+      let anchor = this.bottomSpacer;
+      for (let next = idx + 1; next <= endIndex; next++) {
+        const nextEl = this.mounted.get(next);
+        if (nextEl) {
+          anchor = nextEl;
+          break;
+        }
+      }
+
+      this.container.insertBefore(el, anchor);
+      this.mounted.set(idx, el);
+      newRows.push([idx, el]);
+    }
+
+    if (newRows.length) {
+      const shift = this.measureMountedRows(newRows);
+      if (shift && depth < 2) {
+        this.updateWindow(isInitial, animateInitial, depth + 1);
+        return;
+      }
+    }
+
+    scrollTop = this.container.scrollTop;
+
+    this.setSpacer(this.topSpacer, this.offsets[startIndex]);
+    this.setSpacer(
+      this.bottomSpacer,
+      Math.max(0, this.totalHeight - this.offsets[endIndex + 1])
+    );
+
+    this.revealItems(
+      scrollTop,
+      viewportHeight,
+      isInitial ? animateInitial : true,
+      isInitial
+    );
+  }
+
+  revealItems(scrollTop, viewportHeight, animate, stagger) {
+    const viewTop = scrollTop;
+    const viewBottom = scrollTop + viewportHeight;
+    const toReveal = [];
+
+    for (const [idx, el] of this.mounted) {
+      if (el.classList.contains('is-visible')) continue;
+
+      const itemTop = this.offsets[idx];
+      const itemBottom = itemTop + this.heights[idx];
+
+      if (itemBottom >= viewTop - 10 && itemTop <= viewBottom + COMPLETED_REVEAL_EDGE) {
+        toReveal.push([idx, el]);
+      }
+    }
+
+    if (!toReveal.length) return;
+    toReveal.sort((a, b) => a[0] - b[0]);
+
+    if (!animate) {
+      for (let i = 0; i < toReveal.length; i++) {
+        const el = toReveal[i][1];
+        el.classList.add('is-instant', 'is-visible');
+        el.style.willChange = 'auto';
+      }
+      return;
+    }
+
+    requestAnimationFrame(() => {
+      let revealed = 0;
+      for (let i = 0; i < toReveal.length; i++) {
+        const el = toReveal[i][1];
+        if (!el.isConnected || el.classList.contains('is-visible')) continue;
+
+        void el.offsetWidth;
+        const delay = stagger
+          ? Math.min((revealed % 5) * COMPLETED_STAGGER, COMPLETED_STAGGER_MAX)
+          : 0;
+        el.style.transitionDelay = `${delay}ms`;
+        el.classList.add('is-visible');
+        revealed++;
+
+        setTimeout(() => {
+          if (!el.isConnected) return;
+          el.style.transitionDelay = '';
+          el.style.willChange = 'auto';
+        }, 1000);
+      }
+    });
+  }
+
+  invalidateLayout() {
+    this.metrics = null;
+    this.metricsWidth = -1;
+    this.heightCache.clear();
+    if (!this.items.length) return;
+    this.setItems(this.items, { animateInitial: false, resetScroll: false });
+  }
+
+  clear() {
+    if (this.scrollRaf) {
+      cancelAnimationFrame(this.scrollRaf);
+      this.scrollRaf = 0;
+    }
+    this.items = [];
+    this.heights = new Float64Array(0);
+    this.offsets = new Float64Array(1);
+    this.totalHeight = 0;
+    this.mounted.clear();
+    this.container.replaceChildren();
+  }
+}
+
+function getCompletedVirtualizer() {
+  if (!completedVirtualizer) {
+    completedVirtualizer = new CompletedVirtualizer(DOM.completedList);
+  }
+  return completedVirtualizer;
+}
+
+function renderCompletedTasks({ animate = false, resetScroll = false } = {}) {
+  // The panel is closed: no DOM work is needed until it opens.
+  if (DOM.completedPanel.classList.contains('hidden') && !animate) return;
+  if (completedDrag) return;
+
+  const completed = tasks
+    .filter(t => t.completed)
+    .sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
+
+  const now = Date.now();
+  const signatureParts = new Array(completed.length + 1);
+  signatureParts[0] = new Date(now).toDateString();
+  for (let i = 0; i < completed.length; i++) {
+    const task = completed[i];
+    const completedAt = getTaskCompletionTime(task) || 0;
+    const locked = completedAt && now - completedAt >= ONE_HOUR_MS ? 1 : 0;
+    signatureParts[i + 1] = `${task.id}\u0001${completedAt}\u0001${task.title}\u0001${locked}`;
+  }
+  const signature = signatureParts.join('\u0002');
+
+  if (!animate && !resetScroll && signature === lastCompletedSignature) return;
+  lastCompletedSignature = signature;
+
   DOM.completedEmpty.style.display = completed.length ? 'none' : 'block';
+
+  const virtualizer = getCompletedVirtualizer();
+  virtualizer.setItems(buildCompletedItems(completed), {
+    animateInitial: animate,
+    resetScroll
+  });
 }
 
 
@@ -561,9 +1159,13 @@ DOM.modalInput.addEventListener('keydown', e => {
 let completedScrim = null;
 let preventScrimClose = false;
 let completedPanelTimer = null;
+let completedClearTimer = null;
 
 function openCompletedPanel() {
-  renderCompletedTasks();
+  if (completedClearTimer) {
+    clearTimeout(completedClearTimer);
+    completedClearTimer = null;
+  }
   DOM.completedPanel.classList.remove('hidden');
 
   // Lock task list scroll while panel is open
@@ -596,6 +1198,8 @@ function openCompletedPanel() {
   completedScrim.offsetHeight;
   completedScrim.classList.remove('hidden');
 
+  renderCompletedTasks({ animate: true, resetScroll: true });
+
   if (completedPanelTimer) clearInterval(completedPanelTimer);
   completedPanelTimer = setInterval(renderCompletedTasks, 30000);
 }
@@ -611,6 +1215,14 @@ function closeCompletedPanel() {
     clearInterval(completedPanelTimer);
     completedPanelTimer = null;
   }
+  // Let the panel finish sliding out, then release every mounted row
+  // and its listeners. Reopening cancels this cleanup.
+  if (completedClearTimer) clearTimeout(completedClearTimer);
+  completedClearTimer = setTimeout(() => {
+    completedClearTimer = null;
+    if (!DOM.completedPanel.classList.contains('hidden')) return;
+    if (completedVirtualizer) completedVirtualizer.clear();
+  }, 380);
 }
 
 DOM.completedBtn.addEventListener('click', openCompletedPanel);
@@ -733,27 +1345,31 @@ function handleUntick(li, id) {
     });
   });
   
-  li.addEventListener('transitionend', function handler(e) {
-    if (e.propertyName !== 'height') return;
-    li.removeEventListener('transitionend', handler);
-    const prev = li.previousElementSibling;
-    const next = li.nextElementSibling;
+  let finalized = false;
+  function finalizeUntick() {
+    if (finalized) return;
+    finalized = true;
     li.remove();
+    li.removeEventListener('transitionend', onUntickTransitionEnd);
+    clearTimeout(untickFallback);
 
-    if (prev && prev.classList.contains('completed-date-header')) {
-      if (!next || next.classList.contains('completed-date-header')) {
-        prev.remove();
-      }
-    }
-
-    DOM.completedEmpty.style.display = DOM.completedList.querySelector('.topic-item') ? 'none' : 'block';
+    // Rebuild the virtual list (also removes an empty date header)
+    renderCompletedTasks();
 
     // Add back to main list
     const newEl = createTaskElement(task);
     newEl.classList.add('card--animate-in');
     DOM.taskList.appendChild(newEl);
     updateZebraStripes(DOM.taskList);
-  });
+  }
+
+  function onUntickTransitionEnd(e) {
+    if (e.propertyName !== 'height') return;
+    finalizeUntick();
+  }
+
+  li.addEventListener('transitionend', onUntickTransitionEnd);
+  const untickFallback = setTimeout(finalizeUntick, 350);
 }
 
 
@@ -1184,7 +1800,6 @@ function onPointerUp(e) {
 //  Completed Task Drag-to-Delete Outside Panel
 // ══════════════════════════════════════════════════
 
-let completedDrag = null;
 let potentialCompletedDrag = null;
 let completedLongPressTimeout = null;
 
@@ -1364,28 +1979,28 @@ function onCompletedPointerUp(e) {
     });
 
     const taskId = item.dataset.id;
-    ph.addEventListener('transitionend', function handler(te) {
-      if (te.propertyName !== 'height') return;
-      ph.removeEventListener('transitionend', handler);
-      const prev = ph.previousElementSibling;
-      const next = ph.nextElementSibling;
+    let finalized = false;
+    function finalizeDelete(te) {
+      if (finalized) return;
+      if (te && te.propertyName !== 'height') return;
+      finalized = true;
+      ph.removeEventListener('transitionend', finalizeDelete);
+      clearTimeout(deleteFallback);
+
       ph.remove();
       item.remove();
-
-      if (prev && prev.classList.contains('completed-date-header')) {
-        if (!next || next.classList.contains('completed-date-header')) {
-          prev.remove();
-        }
-      }
 
       const task = tasks.find(t => t.id === taskId);
       if (task) task._lastMutatedAt = Date.now();
       tasks = tasks.filter(t => t.id !== taskId);
       saveTasks();
       if (db) db.from('tasks').delete().eq('id', taskId).then();
-      updateZebraStripes(DOM.completedList);
-      DOM.completedEmpty.style.display = DOM.completedList.querySelector('.topic-item') ? 'none' : 'block';
-    });
+
+      renderCompletedTasks();
+    }
+
+    ph.addEventListener('transitionend', finalizeDelete);
+    const deleteFallback = setTimeout(finalizeDelete, 350);
 
     completedDrag = null;
     return;
@@ -1407,7 +2022,6 @@ function onCompletedPointerUp(e) {
     item.style.cssText = '';
     DOM.completedList.insertBefore(item, ph);
     ph.remove();
-    updateZebraStripes(DOM.completedList);
     completedDrag = null;
   }
 
@@ -1421,3 +2035,11 @@ window.addEventListener('touchmove', (e) => {
     e.preventDefault();
   }
 }, { passive: false });
+
+// Web fonts change glyph widths (and therefore wrapped title heights).
+// Re-measure once the real font is ready so scroll geometry stays exact.
+if (document.fonts && document.fonts.ready) {
+  document.fonts.ready.then(() => {
+    if (completedVirtualizer) completedVirtualizer.invalidateLayout();
+  }).catch(() => {});
+}

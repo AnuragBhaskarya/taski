@@ -592,8 +592,12 @@ main::-webkit-scrollbar-thumb {
 .completed-task-list {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
+  overflow-anchor: none;
   padding: 16px 16px calc(24px + env(safe-area-inset-bottom, 0px));
   touch-action: pan-y;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .completed-task-list .topic-item {
@@ -603,6 +607,66 @@ main::-webkit-scrollbar-thumb {
 
 .completed-task-list .topic-item:active {
   cursor: grabbing;
+}
+
+/* Virtual-list spacers: they only reserve scroll height, no paint. */
+.completed-spacer {
+  list-style: none;
+  display: block;
+  width: 100%;
+  height: 0;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+/* The last real card keeps the old "no trailing margin" look. */
+.completed-task-list .topic-item.is-last {
+  margin-bottom: 0;
+}
+
+/*
+ * Study-tracker signature reveal animation.
+ * Cards and date headers swoop in from the lower-right when they
+ * actually enter the viewport. Only mounted rows carry these styles,
+ * so thousands of completed tasks never animate off-screen.
+ */
+.completed-task-list .topic-item,
+.completed-date-header {
+  opacity: 0;
+  transform: translateX(80px) translateY(100px) scale(0.1);
+  transition: transform 0.8s cubic-bezier(0.2, 0.8, 0.2, 1),
+              opacity 0.7s linear;
+  will-change: transform, opacity;
+}
+
+.completed-task-list .topic-item.is-visible,
+.completed-date-header.is-visible {
+  opacity: 1;
+  transform: none;
+}
+
+/* Used when a data refresh remounts already-seen rows: no replay. */
+.completed-task-list .topic-item.is-instant,
+.completed-date-header.is-instant {
+  transition: none !important;
+  will-change: auto;
+}
+
+.completed-date-header.completed-date-header--first {
+  padding-top: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .completed-task-list .topic-item,
+  .completed-date-header {
+    opacity: 1;
+    transform: none;
+    transition: none !important;
+    will-change: auto;
+  }
 }
 
 .completed-date-header {
