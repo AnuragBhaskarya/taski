@@ -441,8 +441,8 @@ main::-webkit-scrollbar-thumb {
 }
 
 .topic-item--complete .task-time {
-  max-height: 48px;
-  margin-top: 4px;
+  max-height: 24px;
+  margin-top: 3px;
   opacity: 1;
   transform: translateY(0);
 }
@@ -603,6 +603,24 @@ main::-webkit-scrollbar-thumb {
 
 .completed-task-list .topic-item:active {
   cursor: grabbing;
+}
+
+.completed-date-header {
+  list-style: none;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--muted);
+  letter-spacing: 0.3px;
+  padding: 16px 4px 6px;
+  margin: 0;
+  user-select: none;
+  -webkit-user-select: none;
+  pointer-events: none;
+}
+
+.completed-date-header:first-child {
+  padding-top: 2px;
 }
 
 .completed-empty {

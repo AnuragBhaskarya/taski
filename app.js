@@ -42,24 +42,53 @@ function isTaskLocked(task) {
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-function formatCompletedDateTime(timestamp) {
-  if (!timestamp) return '';
+function getTaskDateKey(timestamp) {
+  if (!timestamp) return 'earlier';
   const d = new Date(typeof timestamp === 'number' ? timestamp : Number(timestamp) || timestamp);
-  if (isNaN(d.getTime())) return '';
+  if (isNaN(d.getTime())) return 'earlier';
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function formatCompletedDateHeader(timestamp) {
+  if (!timestamp) return 'Earlier';
+  const d = new Date(typeof timestamp === 'number' ? timestamp : Number(timestamp) || timestamp);
+  if (isNaN(d.getTime())) return 'Earlier';
 
   const day = d.getDate();
   const month = MONTH_NAMES[d.getMonth()];
   const year = d.getFullYear();
   const dateStr = `${day} ${month}, ${year}`;
 
+  const today = new Date();
+  if (d.toDateString() === today.toDateString()) {
+    return `Today · ${dateStr}`;
+  }
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) {
+    return `Yesterday · ${dateStr}`;
+  }
+  return dateStr;
+}
+
+function formatCompletedTime(timestamp) {
+  if (!timestamp) return '';
+  const d = new Date(typeof timestamp === 'number' ? timestamp : Number(timestamp) || timestamp);
+  if (isNaN(d.getTime())) return '';
+
   let hours = d.getHours();
   const minutes = String(d.getMinutes()).padStart(2, '0');
   const ampm = hours >= 12 ? 'PM' : 'AM';
   hours = hours % 12;
   const hoursStr = String(hours ? hours : 12).padStart(2, '0');
-  const timeStr = `${hoursStr}:${minutes} ${ampm}`;
+  return `${hoursStr}:${minutes} ${ampm}`;
+}
 
-  return `${dateStr}<br>${timeStr}`;
+function createDateHeaderElement(timestamp) {
+  const li = document.createElement('li');
+  li.className = 'completed-date-header';
+  li.textContent = formatCompletedDateHeader(timestamp);
+  return li;
 }
 
 let tasks = JSON.parse(localStorage.getItem('taski_tasks') || '[]');
@@ -368,7 +397,7 @@ function createTaskElement(task, forCompletedPanel = false) {
   li.dataset.id = task.id;
 
   const locked = forCompletedPanel && isTaskLocked(task);
-  const timeHtml = task.completedAt ? formatCompletedDateTime(task.completedAt) : '';
+  const timeHtml = task.completedAt ? formatCompletedTime(task.completedAt) : '';
 
   li.innerHTML = `
     <label class="cb-hit ${locked ? 'cb-hit--locked' : ''}">
@@ -435,7 +464,13 @@ function renderActiveTasks() {
 function renderCompletedTasks() {
   DOM.completedList.innerHTML = '';
   const completed = tasks.filter(t => t.completed).sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0));
+  let lastDateKey = null;
   completed.forEach(t => {
+    const dateKey = getTaskDateKey(t.completedAt);
+    if (dateKey !== lastDateKey) {
+      lastDateKey = dateKey;
+      DOM.completedList.appendChild(createDateHeaderElement(t.completedAt));
+    }
     const el = createTaskElement(t, true);
     el.classList.remove('card--animate-in');
     DOM.completedList.appendChild(el);
@@ -602,7 +637,7 @@ function handleTaskComplete(e, li, id) {
 
   li.classList.add('topic-item--complete', 'topic-item--celebrate');
   const td = li.querySelector('.task-time');
-  if (td) td.innerHTML = formatCompletedDateTime(task.completedAt);
+  if (td) td.innerHTML = formatCompletedTime(task.completedAt);
 
   // Confetti + flash + ripple
   spawnConfetti(li, cb);
@@ -701,8 +736,17 @@ function handleUntick(li, id) {
   li.addEventListener('transitionend', function handler(e) {
     if (e.propertyName !== 'height') return;
     li.removeEventListener('transitionend', handler);
+    const prev = li.previousElementSibling;
+    const next = li.nextElementSibling;
     li.remove();
-    DOM.completedEmpty.style.display = DOM.completedList.children.length ? 'none' : 'block';
+
+    if (prev && prev.classList.contains('completed-date-header')) {
+      if (!next || next.classList.contains('completed-date-header')) {
+        prev.remove();
+      }
+    }
+
+    DOM.completedEmpty.style.display = DOM.completedList.querySelector('.topic-item') ? 'none' : 'block';
 
     // Add back to main list
     const newEl = createTaskElement(task);
@@ -1323,8 +1367,16 @@ function onCompletedPointerUp(e) {
     ph.addEventListener('transitionend', function handler(te) {
       if (te.propertyName !== 'height') return;
       ph.removeEventListener('transitionend', handler);
+      const prev = ph.previousElementSibling;
+      const next = ph.nextElementSibling;
       ph.remove();
       item.remove();
+
+      if (prev && prev.classList.contains('completed-date-header')) {
+        if (!next || next.classList.contains('completed-date-header')) {
+          prev.remove();
+        }
+      }
 
       const task = tasks.find(t => t.id === taskId);
       if (task) task._lastMutatedAt = Date.now();
@@ -1332,7 +1384,7 @@ function onCompletedPointerUp(e) {
       saveTasks();
       if (db) db.from('tasks').delete().eq('id', taskId).then();
       updateZebraStripes(DOM.completedList);
-      DOM.completedEmpty.style.display = DOM.completedList.children.length ? 'none' : 'block';
+      DOM.completedEmpty.style.display = DOM.completedList.querySelector('.topic-item') ? 'none' : 'block';
     });
 
     completedDrag = null;
