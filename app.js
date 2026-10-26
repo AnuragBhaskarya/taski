@@ -106,6 +106,7 @@ const ACTIVE_REVEAL_INSET = 8;    // px inside the viewport where the reveal sta
 const ACTIVE_REVEAL_RESET = 0;    // re-arm as soon as a card is fully out
 const ACTIVE_STAGGER = 35;
 const ACTIVE_STAGGER_MAX = 140;
+const REVEAL_EXIT_MS = 850;       // slightly longer than the 0.8s transform
 
 let activeCards = [];
 let activeRevealed = new Set();
@@ -157,7 +158,14 @@ function getActiveRange(topLimit, bottomLimit) {
 
 function rebuildActiveGeometry() {
   const list = DOM.taskList;
-  const base = list.offsetTop;
+  const main = DOM.main;
+  // scrollTop is measured from the scroll container's content edge, so
+  // the list must be too. Using list.offsetTop alone adds the header
+  // height, which made cards reset while still visible at the bottom.
+  const base = list.getBoundingClientRect().top
+    - main.getBoundingClientRect().top
+    - main.clientTop
+    + main.scrollTop;
   const cards = [];
 
   for (const el of list.children) {
@@ -176,6 +184,10 @@ function rebuildActiveGeometry() {
 
 function revealActiveTaskNow(el, taskId) {
   if (!el || !taskId) return;
+  if (el.__activeRevealTimer) {
+    clearTimeout(el.__activeRevealTimer);
+    el.__activeRevealTimer = null;
+  }
   revealedActiveTaskIds.add(taskId);
   el.classList.add('is-instant', 'is-visible');
   el.style.willChange = 'auto';
@@ -187,11 +199,20 @@ function resetActiveTask(el) {
     clearTimeout(el.__activeRevealTimer);
     el.__activeRevealTimer = null;
   }
-  el.classList.add('is-instant');
-  el.classList.remove('is-visible');
+  // Play the entrance backwards instead of snapping to hidden. The
+  // card is already fully outside the viewport, so this mostly matters
+  // when the user reverses direction mid-exit.
+  el.classList.remove('is-instant', 'is-visible');
   el.style.transitionDelay = '';
-  el.style.willChange = 'auto';
+  el.style.willChange = 'transform, opacity';
   activeRevealed.delete(el);
+
+  el.__activeRevealTimer = setTimeout(() => {
+    if (!el.isConnected) return;
+    el.classList.add('is-instant');
+    el.style.willChange = 'auto';
+    el.__activeRevealTimer = null;
+  }, REVEAL_EXIT_MS);
 }
 
 function showActiveTask(el, delay) {
@@ -1192,12 +1213,23 @@ class CompletedVirtualizer {
         // Re-arm rows once they are clearly outside the viewport, so
         // reversing scroll direction animates them again instead of
         // showing a few pre-revealed solid cards next to the viewport.
+        // Remove is-visible (not is-instant) so they play the entrance
+        // backwards on the way out instead of popping away.
         if (itemBottom < viewTop - COMPLETED_REVEAL_RESET ||
             itemTop > viewBottom + COMPLETED_REVEAL_RESET) {
-          el.classList.add('is-instant');
-          el.classList.remove('is-visible');
+          if (el.__completedExitTimer) {
+            clearTimeout(el.__completedExitTimer);
+            el.__completedExitTimer = null;
+          }
+          el.classList.remove('is-instant', 'is-visible');
           el.style.transitionDelay = '';
-          el.style.willChange = 'auto';
+          el.style.willChange = 'transform, opacity';
+          el.__completedExitTimer = setTimeout(() => {
+            if (!el.isConnected) return;
+            el.classList.add('is-instant');
+            el.style.willChange = 'auto';
+            el.__completedExitTimer = null;
+          }, REVEAL_EXIT_MS);
         }
         continue;
       }
@@ -1213,6 +1245,10 @@ class CompletedVirtualizer {
     if (!animate) {
       for (let i = 0; i < toReveal.length; i++) {
         const el = toReveal[i][1];
+        if (el.__completedExitTimer) {
+          clearTimeout(el.__completedExitTimer);
+          el.__completedExitTimer = null;
+        }
         el.classList.add('is-instant', 'is-visible');
         el.style.willChange = 'auto';
       }
@@ -1225,6 +1261,10 @@ class CompletedVirtualizer {
         const el = toReveal[i][1];
         if (!el.isConnected || el.classList.contains('is-visible')) continue;
 
+        if (el.__completedExitTimer) {
+          clearTimeout(el.__completedExitTimer);
+          el.__completedExitTimer = null;
+        }
         el.classList.remove('is-instant');
         void el.offsetWidth;
         const delay = isInitial
