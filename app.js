@@ -237,8 +237,6 @@ function showActiveTask(el, delay) {
 
 function updateActiveReveal() {
   if (!activeCards.length) return;
-  // The dragged card temporarily lives on <body>; leave it alone.
-  if (document.body.classList.contains('is-dragging')) return;
 
   const { viewTop, viewBottom } = getActiveViewport();
   if (viewBottom <= viewTop) return;
@@ -251,6 +249,8 @@ function updateActiveReveal() {
       activeRevealed.delete(el);
       continue;
     }
+    // The lifted card lives on <body> while dragging; never reset it.
+    if (el.classList.contains('drag-active')) continue;
     if (card.bottom < viewTop - ACTIVE_REVEAL_RESET ||
         card.top > viewBottom + ACTIVE_REVEAL_RESET) {
       resetActiveTask(el);
@@ -264,6 +264,7 @@ function updateActiveReveal() {
 
   for (let i = range.start; i <= range.end; i++) {
     const el = activeCards[i].el;
+    if (el.classList.contains('drag-active')) continue;
     if (!el.classList.contains('is-visible')) toReveal.push(el);
   }
 
@@ -510,7 +511,9 @@ function runLoop() {
       if (s.onUpdate) {
         s.onUpdate(s.y, el);
       } else {
-        el.style.transform = `translateY(${s.y}px)`;
+        // Use the individual translate property so the drag FLIP does
+        // not fight the reveal animation's transform transition.
+        el.style.translate = `0 ${s.y}px`;
       }
 
       if (Math.abs(s.y - s.target) < REST_DELTA && Math.abs(s.vy) < REST_VELOCITY) {
@@ -520,7 +523,7 @@ function runLoop() {
         if (s.onUpdate) {
           s.onUpdate(s.y, el);
         } else {
-          el.style.transform = s.target === 0 ? '' : `translateY(${s.target}px)`;
+          el.style.translate = s.target === 0 ? '' : `0 ${s.target}px`;
         }
         
         alive.delete(el);
@@ -555,10 +558,9 @@ function animateSpring(el, startY, target = 0, onUpdate = null, onComplete = nul
 function captureRects(elements) {
   const map = new Map();
   for (const el of elements) {
-    const s = spring(el);
-    const currentY = s.onUpdate ? 0 : (s.y || 0);
-    const rect = el.getBoundingClientRect();
-    map.set(el, rect.top - currentY);
+    // Layout position, not the animated rect: reveal/FLIP transforms
+    // must not affect drag sorting.
+    map.set(el, el.offsetTop);
   }
   return map;
 }
@@ -570,10 +572,7 @@ function flipAnimate(elements, oldTops) {
 
     const s = spring(el);
     const currentY = s.onUpdate ? 0 : (s.y || 0);
-    const newRect = el.getBoundingClientRect();
-    const newTop = newRect.top - currentY;
-
-    const dy = oldTop - newTop;
+    const dy = oldTop - el.offsetTop;
     if (Math.abs(dy) < 1) continue;
 
     animateSpring(el, currentY + dy);
@@ -1749,6 +1748,7 @@ function startDrag(pd, isReordering) {
   s.y = 0; s.vy = 0; s.target = 0;
   alive.delete(item);
   item.style.transform = '';
+  item.style.translate = '';
 
   // Placeholder
   const ph = document.createElement('li');
@@ -1801,6 +1801,11 @@ function startDrag(pd, isReordering) {
   document.body.classList.add('is-dragging');
   document.getElementById('fabContainer').classList.add('fab-hide');
 
+  // The lifted card left the list, so rebuild now to keep reveal
+  // geometry aligned with the placeholder gap.
+  rebuildActiveGeometry();
+  scheduleActiveReveal();
+
   drag.scrollRAF = requestAnimationFrame(autoScrollLoop);
   potentialDrag = null;
 }
@@ -1814,14 +1819,13 @@ function updatePlaceholder(dragY) {
   if (swipeLeftDistance > drag.itemWidth * 0.05) return;
 
   const children = Array.from(DOM.taskList.children);
+  const listTop = DOM.taskList.getBoundingClientRect().top;
   let newIdx = children.length;
 
   for (let i = 0; i < children.length; i++) {
     const c = children[i];
     if (c === drag.ph) continue;
-    const cr = c.getBoundingClientRect();
-    const s = spring(c);
-    const mid = (cr.top - (s.y||0)) + cr.height / 2;
+    const mid = listTop + c.offsetTop + c.offsetHeight / 2;
     if (dragY < mid) { newIdx = i; break; }
   }
 
@@ -1834,6 +1838,10 @@ function updatePlaceholder(dragY) {
     else DOM.taskList.insertBefore(drag.ph, children[newIdx] === drag.ph ? children[newIdx+1] : children[newIdx]);
 
     flipAnimate(itemsInList(), before);
+    // Moving the placeholder shifts every card between slots; refresh
+    // the reveal cache so auto-scroll reveals the right rows.
+    rebuildActiveGeometry();
+    scheduleActiveReveal();
   }
 }
 
