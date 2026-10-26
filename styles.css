@@ -18,6 +18,10 @@
   --bg-row-odd: #dddddd;
   --bg-row-even: #f4f4f4;
   --accent: #2a9c73;
+  --cal-soft: rgba(0,0,0,.045);
+  --cal-soft-strong: rgba(0,0,0,.075);
+  --cal-accent-soft: rgba(42,156,115,.11);
+  --cal-ring: rgba(42,156,115,.5);
 }
 
 .dark {
@@ -33,6 +37,10 @@
   --wht:#0b0b0b;
   --bg-row-odd: #131313;
   --bg-row-even: #0a0a0a;
+  --cal-soft: rgba(255,255,255,.055);
+  --cal-soft-strong: rgba(255,255,255,.09);
+  --cal-accent-soft: rgba(42,156,115,.2);
+  --cal-ring: rgba(66,196,151,.6);
 }
 
 *, *::before, *::after {
@@ -572,7 +580,14 @@ main::-webkit-scrollbar-thumb {
   color: var(--txt);
 }
 
-.completed-panel__close {
+.completed-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.completed-panel__close,
+.completed-panel__calendar {
   background: transparent;
   border: none;
   color: var(--txt);
@@ -582,11 +597,25 @@ main::-webkit-scrollbar-thumb {
   border-radius: 50%;
   display: grid;
   place-items: center;
-  transition: background var(--anim-fast) ease;
+  transition: background var(--anim-fast) ease, color var(--anim-fast) ease, transform var(--anim-fast) ease;
 }
 
-.completed-panel__close:hover {
+.completed-panel__close:hover,
+.completed-panel__calendar:hover {
   background: var(--line);
+}
+
+.completed-panel__calendar:active,
+.completed-panel__close:active {
+  transform: scale(0.92);
+}
+
+.completed-panel__calendar {
+  color: var(--muted);
+}
+
+.completed-panel__calendar:hover {
+  color: var(--accent);
 }
 
 .completed-task-list {
@@ -720,6 +749,580 @@ main::-webkit-scrollbar-thumb {
   text-align: center;
   color: var(--muted);
   font-size: 14px;
+}
+
+/* Jump pulse on the date header the calendar lands on */
+@keyframes completed-date-header-pulse {
+  0%   { color: var(--accent); transform: translateX(0); }
+  22%  { color: var(--accent); transform: translateX(5px); }
+  55%  { color: var(--accent); transform: translateX(-2px); }
+  100% { color: var(--muted); transform: translateX(0); }
+}
+
+.completed-date-header--pulse {
+  animation: completed-date-header-pulse 1.25s cubic-bezier(.22, 1, .36, 1) both;
+}
+
+/* ── Completed History Calendar ── */
+@keyframes taski-calendar-pop-in {
+  0%   { opacity: 0; transform: scale(.92) translateY(14px); }
+  68%  { opacity: 1; transform: scale(1.012) translateY(-2px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes taski-calendar-pop-out {
+  0%   { opacity: 1; transform: scale(1) translateY(0); }
+  100% { opacity: 0; transform: scale(.955) translateY(8px); }
+}
+
+@keyframes taski-calendar-backdrop-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.taski-calendar-dialog {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: max-content;
+  height: max-content;
+  max-width: none;
+  max-height: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--txt);
+  font: inherit;
+  outline: none;
+  overflow: visible;
+}
+
+.taski-calendar-dialog::backdrop {
+  background: rgba(0, 0, 0, .34);
+  backdrop-filter: blur(7px);
+  -webkit-backdrop-filter: blur(7px);
+  animation: taski-calendar-backdrop-in .22s ease forwards;
+}
+
+.dark .taski-calendar-dialog::backdrop {
+  background: rgba(0, 0, 0, .64);
+}
+
+.taski-calendar-dialog[open] .taski-calendar-shell {
+  animation: taski-calendar-pop-in .3s cubic-bezier(.34, 1.42, .64, 1) both;
+}
+
+.taski-calendar-dialog.is-closing .taski-calendar-shell {
+  animation: taski-calendar-pop-out .18s cubic-bezier(.4, 0, .2, 1) both;
+}
+
+.taski-calendar-shell {
+  width: min(calc(100vw - 28px), 396px);
+  background: var(--bg);
+  color: var(--txt);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  box-shadow: 0 28px 72px rgba(0, 0, 0, .2), 0 2px 8px rgba(0, 0, 0, .06);
+  padding: 13px 14px 12px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font: inherit;
+  outline: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.dark .taski-calendar-shell {
+  box-shadow: 0 30px 84px rgba(0, 0, 0, .86), 0 0 32px rgba(42, 156, 115, .05);
+}
+
+.taski-calendar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+  padding: 0 1px;
+}
+
+.taski-calendar-title-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 0 -2px;
+  padding: 5px 3px;
+  background: transparent;
+  border: 0;
+  border-radius: 9px;
+  color: var(--txt);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: .2px;
+  cursor: pointer;
+  transition: color var(--anim-fast) ease, background var(--anim-fast) ease;
+}
+
+.taski-calendar-title-btn:hover {
+  color: var(--accent);
+  background: var(--cal-soft);
+}
+
+.taski-calendar-chevron {
+  color: var(--muted);
+  flex-shrink: 0;
+  transition: transform .22s cubic-bezier(.22, 1, .36, 1), color var(--anim-fast) ease;
+}
+
+.taski-calendar-title-btn:hover .taski-calendar-chevron {
+  color: var(--accent);
+}
+
+.taski-calendar-title-btn.is-open .taski-calendar-chevron {
+  transform: rotate(180deg);
+}
+
+.taski-calendar-close {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: color var(--anim-fast) ease, background var(--anim-fast) ease, transform var(--anim-fast) ease;
+}
+
+.taski-calendar-close:hover {
+  color: var(--txt);
+  background: var(--cal-soft-strong);
+}
+
+.taski-calendar-close:active {
+  transform: scale(.9);
+}
+
+.taski-calendar-shell.is-dial-open #taski-calendar-header {
+  display: none;
+}
+
+.taski-calendar-main-view {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.taski-calendar-shortcuts {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 5px;
+}
+
+.taski-calendar-pill {
+  padding: 4px 0;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .15px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--anim-fast) ease, background var(--anim-fast) ease, border-color var(--anim-fast) ease, transform var(--anim-fast) ease;
+}
+
+.taski-calendar-pill:hover {
+  color: var(--txt);
+  background: var(--cal-soft);
+  border-color: var(--cal-ring);
+}
+
+.taski-calendar-pill:active {
+  transform: scale(.96);
+}
+
+.taski-calendar-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  text-align: center;
+  padding: 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.taski-calendar-viewport {
+  position: relative;
+  width: 100%;
+  height: 252px;
+  overflow: hidden;
+  border-radius: 12px;
+  touch-action: pan-y;
+  cursor: grab;
+}
+
+.taski-calendar-viewport:active {
+  cursor: grabbing;
+}
+
+.taski-calendar-track {
+  display: flex;
+  width: 300%;
+  height: 100%;
+  transform: translate3d(-33.333333%, 0, 0);
+  will-change: transform;
+}
+
+.taski-calendar-track.animating {
+  transition: transform .32s cubic-bezier(.22, 1, .36, 1);
+}
+
+.taski-calendar-slide {
+  width: 33.333333%;
+  flex: 0 0 33.333333%;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.taski-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  grid-template-rows: repeat(6, 1fr);
+  gap: 3px;
+  width: 100%;
+  height: 252px;
+  box-sizing: border-box;
+}
+
+.taski-calendar-day {
+  position: relative;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  font-family: inherit;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  box-sizing: border-box;
+  transition: color .16s ease, background-color .16s ease, transform .16s ease, box-shadow .16s ease, opacity .16s ease;
+}
+
+.taski-calendar-day:hover {
+  color: var(--txt);
+  background: var(--cal-soft-strong);
+  transform: scale(1.03);
+}
+
+.taski-calendar-day.has-tasks {
+  color: var(--txt);
+  font-weight: 600;
+}
+
+.taski-calendar-day.is-today {
+  box-shadow: inset 0 0 0 1px var(--cal-ring);
+}
+
+.taski-calendar-day.is-active-day {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+  box-shadow: 0 4px 12px rgba(42, 156, 115, .25);
+}
+
+.taski-calendar-day.is-active-day:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+.taski-calendar-day.is-future,
+.taski-calendar-day.is-future:hover {
+  opacity: .24;
+  background: transparent;
+  color: var(--fg);
+  box-shadow: none;
+  transform: none;
+  pointer-events: none;
+}
+
+.taski-calendar-day.empty {
+  visibility: hidden;
+  pointer-events: none;
+  background: transparent;
+  border-color: transparent;
+}
+
+.taski-calendar-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 14px;
+  padding-top: 7px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .15px;
+}
+
+.taski-calendar-footer-dot {
+  opacity: .55;
+}
+
+/* Dial month / year picker */
+.taski-calendar-dial-view {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: taski-calendar-dial-in .2s cubic-bezier(.22, 1, .36, 1) both;
+}
+
+@keyframes taski-calendar-dial-in {
+  from { opacity: 0; transform: scale(.975); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+.taski-calendar-dial-frame {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--cal-soft);
+  touch-action: none;
+}
+
+.taski-calendar-dial-lens {
+  position: absolute;
+  top: 78px;
+  left: 8px;
+  right: 8px;
+  height: 44px;
+  border-radius: 10px;
+  background: var(--cal-accent-soft);
+  border-top: 1px solid var(--cal-ring);
+  border-bottom: 1px solid var(--cal-ring);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.taski-calendar-dial-fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 70px;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.taski-calendar-dial-fade.top {
+  top: 0;
+  background: linear-gradient(to bottom, var(--bg) 18%, transparent 100%);
+}
+
+.taski-calendar-dial-fade.bottom {
+  bottom: 0;
+  background: linear-gradient(to top, var(--bg) 18%, transparent 100%);
+}
+
+.taski-calendar-drum {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  height: 200px;
+  overflow: hidden;
+  text-align: center;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.taski-calendar-drum:active {
+  cursor: grabbing;
+}
+
+.taski-calendar-drum-wheel {
+  position: absolute;
+  top: 78px;
+  left: 0;
+  width: 100%;
+  will-change: transform;
+}
+
+.taski-calendar-drum-wheel.animating {
+  transition: transform .28s cubic-bezier(.22, 1, .36, 1);
+}
+
+.taski-calendar-drum-divider {
+  flex-shrink: 0;
+  width: 1px;
+  height: 132px;
+  background: var(--line);
+  z-index: 2;
+}
+
+.taski-calendar-drum-item {
+  height: 44px;
+  line-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: color .14s ease, transform .14s ease, opacity .14s ease;
+}
+
+.taski-calendar-drum-item:hover {
+  color: var(--txt);
+}
+
+.taski-calendar-drum-item.is-selected {
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 15.5px;
+  transform: scale(1.04);
+}
+
+.taski-calendar-drum-item.is-disabled {
+  opacity: .22;
+  pointer-events: none;
+}
+
+.taski-calendar-dial-done {
+  width: 100%;
+  height: 40px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--txt);
+  color: var(--bg);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .2px;
+  cursor: pointer;
+  transition: opacity var(--anim-fast) ease, transform var(--anim-fast) ease;
+}
+
+.taski-calendar-dial-done:hover {
+  opacity: .86;
+}
+
+.taski-calendar-dial-done:active {
+  transform: scale(.985);
+}
+
+/* Small jump confirmation (only shown when a date without tasks snaps nearby) */
+.taski-calendar-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(22px + env(safe-area-inset-bottom, 0px));
+  z-index: 12000;
+  max-width: calc(100vw - 40px);
+  padding: 8px 15px;
+  border-radius: 999px;
+  background: var(--txt);
+  color: var(--bg);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .18);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-align: center;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, 8px) scale(.97);
+  transition: opacity .2s ease, transform .24s cubic-bezier(.22, 1, .36, 1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.taski-calendar-toast.is-visible {
+  opacity: 1;
+  transform: translate(-50%, 0) scale(1);
+}
+
+@media (max-height: 620px) and (pointer: coarse) {
+  .taski-calendar-viewport,
+  .taski-calendar-grid {
+    height: 218px;
+  }
+}
+
+@media (max-width: 380px) {
+  .taski-calendar-viewport,
+  .taski-calendar-grid {
+    height: 234px;
+  }
+
+  .taski-calendar-shell {
+    padding: 12px 12px 11px;
+  }
+}
+
+@media (max-height: 520px) {
+  .taski-calendar-shell {
+    max-height: calc(100dvh - 12px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
+  }
+
+  .taski-calendar-shell::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
+}
+
+@media (max-width: 768px), (pointer: coarse) {
+  .taski-calendar-dialog::backdrop {
+    background: rgba(0, 0, 0, .66);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .taski-calendar-dialog[open] .taski-calendar-shell,
+  .taski-calendar-dialog.is-closing .taski-calendar-shell,
+  .taski-calendar-dial-view {
+    animation-duration: .01s !important;
+  }
+
+  .taski-calendar-track.animating,
+  .taski-calendar-drum-wheel.animating {
+    transition-duration: .01s !important;
+  }
+
+  .completed-date-header--pulse {
+    animation-duration: .01s !important;
+  }
 }
 
 /* Scrim behind completed panel */

@@ -19,6 +19,28 @@ const DOM = {
   completedClose: document.getElementById('completedClose'),
   completedList: document.getElementById('completedList'),
   completedEmpty: document.getElementById('completedEmpty'),
+  completedCalendarBtn: document.getElementById('completedCalendarBtn'),
+  calendarDialog: document.getElementById('completedCalendarDialog'),
+  calendarShell: document.getElementById('taski-calendar-shell'),
+  calendarHeader: document.getElementById('taski-calendar-header'),
+  calendarTitleBtn: document.getElementById('taski-calendar-title-btn'),
+  calendarTitle: document.getElementById('taski-calendar-title'),
+  calendarCloseBtn: document.getElementById('btn-close-completed-calendar'),
+  calendarMainView: document.getElementById('taski-calendar-main-view'),
+  calendarViewport: document.getElementById('taski-calendar-viewport'),
+  calendarTrack: document.getElementById('taski-calendar-track'),
+  calendarGrid: document.getElementById('taski-calendar-grid'),
+  calendarGridPrev: document.getElementById('taski-calendar-grid-prev'),
+  calendarGridNext: document.getElementById('taski-calendar-grid-next'),
+  calendarMonthCount: document.getElementById('taski-calendar-month-count'),
+  calendarMonthDays: document.getElementById('taski-calendar-month-days'),
+  calendarDialView: document.getElementById('taski-calendar-dial-view'),
+  calendarDialDone: document.getElementById('taski-calendar-dial-done'),
+  calendarMonthDrum: document.getElementById('taski-calendar-drum-month'),
+  calendarYearDrum: document.getElementById('taski-calendar-drum-year'),
+  calendarMonthWheel: document.getElementById('taski-calendar-drum-wheel-month'),
+  calendarYearWheel: document.getElementById('taski-calendar-drum-wheel-year'),
+  calendarToast: document.getElementById('taskiCalendarToast'),
 };
 
 // ══════════════════════════════════
@@ -1003,6 +1025,7 @@ class CompletedVirtualizer {
 
     this.scrollRaf = 0;
     this.resizeRaf = 0;
+    this.scrollAnimation = 0;
 
     this.onScroll = this.onScroll.bind(this);
     container.addEventListener('scroll', this.onScroll, { passive: true });
@@ -1311,6 +1334,87 @@ class CompletedVirtualizer {
     this.flushRowRise(oldRise);
   }
 
+  findDateHeaderIndex(dateKey) {
+    for (let i = 0; i < this.items.length; i++) {
+      const item = this.items[i];
+      if (item.type !== 'header') continue;
+      if (getTaskDateKey(item.timestamp) === dateKey) return i;
+    }
+    return -1;
+  }
+
+  scrollToDate(dateKey, { smooth = true, flash = true } = {}) {
+    const index = this.findDateHeaderIndex(dateKey);
+    if (index < 0) return false;
+
+    const maxScroll = Math.max(0, this.container.scrollHeight - this.container.clientHeight);
+    const target = Math.min(Math.max(0, this.offsets[index] - 6), maxScroll);
+    this.scrollToOffset(target, smooth, () => {
+      if (flash) this.flashDateHeader(index);
+    });
+    return true;
+  }
+
+  scrollToOffset(target, smooth, onDone) {
+    if (this.scrollAnimation) {
+      cancelAnimationFrame(this.scrollAnimation);
+      this.scrollAnimation = 0;
+    }
+
+    const start = this.container.scrollTop;
+    const distance = target - start;
+
+    if (!smooth || Math.abs(distance) < 1) {
+      this.container.scrollTop = target;
+      if (onDone) onDone();
+      return;
+    }
+
+    // A short, eased glide reads better than the browser's native
+    // smooth scroll over a virtual list that can be tens of thousands
+    // of pixels tall.
+    const duration = Math.min(560, Math.max(240, 200 + Math.log2(1 + Math.abs(distance) / 100) * 90));
+    const startedAt = performance.now();
+
+    const step = (now) => {
+      const t = Math.min(1, (now - startedAt) / duration);
+      const eased = t < 0.5
+        ? 4 * t * t * t
+        : 1 - Math.pow(-2 * t + 2, 3) / 2;
+      this.container.scrollTop = start + distance * eased;
+
+      if (t < 1) {
+        this.scrollAnimation = requestAnimationFrame(step);
+      } else {
+        this.scrollAnimation = 0;
+        if (onDone) requestAnimationFrame(onDone);
+      }
+    };
+
+    this.scrollAnimation = requestAnimationFrame(step);
+  }
+
+  flashDateHeader(index) {
+    if (index < 0 || index >= this.items.length) return;
+
+    let el = this.mounted.get(index);
+    if (!el || !el.isConnected) {
+      this.updateWindow(false, false);
+      el = this.mounted.get(index);
+    }
+    if (!el) return;
+
+    el.classList.remove('completed-date-header--pulse');
+    void el.offsetWidth;
+    el.classList.add('completed-date-header--pulse');
+
+    if (el.__completedPulseTimer) clearTimeout(el.__completedPulseTimer);
+    el.__completedPulseTimer = setTimeout(() => {
+      el.classList.remove('completed-date-header--pulse');
+      el.__completedPulseTimer = null;
+    }, 1300);
+  }
+
   getVisibleRange(scrollTop, viewportHeight) {
     const minY = Math.max(0, scrollTop - COMPLETED_OVERSCAN);
     const maxY = scrollTop + viewportHeight + COMPLETED_OVERSCAN;
@@ -1558,6 +1662,10 @@ class CompletedVirtualizer {
       cancelAnimationFrame(this.scrollRaf);
       this.scrollRaf = 0;
     }
+    if (this.scrollAnimation) {
+      cancelAnimationFrame(this.scrollAnimation);
+      this.scrollAnimation = 0;
+    }
     this.items = [];
     this.heights = new Float64Array(0);
     this.offsets = new Float64Array(1);
@@ -1760,6 +1868,968 @@ function closeCompletedPanel() {
 
 DOM.completedBtn.addEventListener('click', openCompletedPanel);
 DOM.completedClose.addEventListener('click', closeCompletedPanel);
+
+
+// ══════════════════════════════════════════════════════
+//  Completed History Calendar (month grid + month/year dial)
+// ══════════════════════════════════════════════════════
+
+const CAL_DIAL_ITEM_HEIGHT = 44;
+const CAL_DIAL_MIN_YEAR = 2000;
+
+let completedCalYear = new Date().getFullYear();
+let completedCalMonth = new Date().getMonth();
+let completedCalSelectedDate = '';
+let completedCalData = new Map();
+let completedCalMonthTransitioning = false;
+let completedCalMonthDragging = false;
+let completedCalWasDragging = false;
+let completedCalDialOpen = false;
+let completedCalPendingMonth = 0;
+let completedCalPendingYear = 0;
+let completedCalDialYears = [];
+let completedCalMonthWheel = null;
+let completedCalYearWheel = null;
+let completedCalCloseTimer = 0;
+let completedCalBoundaryTimer = 0;
+let completedCalToastTimer = 0;
+let completedCalLastTodayKey = '';
+let completedCalWheelLock = false;
+let completedCalWheelAccumX = 0;
+let completedCalWheelAccumY = 0;
+let completedCalWheelResetTimer = 0;
+
+function formatCalendarDayKey(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function getCalendarBounds() {
+  const now = new Date();
+  return {
+    year: now.getFullYear(),
+    month: now.getMonth(),
+    todayKey: formatCalendarDayKey(now)
+  };
+}
+
+function isCalendarMonthFuture(year, month, bounds = getCalendarBounds()) {
+  return year > bounds.year || (year === bounds.year && month > bounds.month);
+}
+
+function collectCompletedCalendarData() {
+  const data = new Map();
+  const todayKey = formatCalendarDayKey();
+  for (let i = 0; i < tasks.length; i++) {
+    const task = tasks[i];
+    if (!task.completed) continue;
+    const completedAt = getTaskCompletionTime(task);
+    if (!completedAt) continue;
+    const dateKey = getTaskDateKey(completedAt);
+    if (dateKey === 'earlier' || dateKey > todayKey) continue;
+    data.set(dateKey, (data.get(dateKey) || 0) + 1);
+  }
+  return data;
+}
+
+function formatCalendarDateLabel(dateKey) {
+  const parts = dateKey.split('-');
+  if (parts.length !== 3) return dateKey;
+  const year = parseInt(parts[0], 10);
+  const month = parseInt(parts[1], 10) - 1;
+  const day = parseInt(parts[2], 10);
+  if (!MONTH_NAMES[month]) return dateKey;
+  return `${day} ${MONTH_NAMES[month]}${year === new Date().getFullYear() ? '' : ` ${year}`}`;
+}
+
+function findNearestCompletedCalendarDate(dateKey, sortedKeys) {
+  const target = Date.parse(`${dateKey}T12:00:00`);
+  let best = sortedKeys[0];
+  let bestDiff = Infinity;
+  for (let i = 0; i < sortedKeys.length; i++) {
+    const candidate = sortedKeys[i];
+    const diff = Math.abs(Date.parse(`${candidate}T12:00:00`) - target);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+function renderCompletedCalendarMonth(year, month, container, isCurrent) {
+  if (!container) return { count: 0, days: 0 };
+
+  container.replaceChildren();
+
+  const bounds = getCalendarBounds();
+  const firstDayIndex = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const fragment = document.createDocumentFragment();
+  let totalCount = 0;
+  let activeDays = 0;
+
+  for (let i = 0; i < firstDayIndex; i++) {
+    const empty = document.createElement('div');
+    empty.className = 'taski-calendar-day empty';
+    empty.setAttribute('aria-hidden', 'true');
+    fragment.appendChild(empty);
+  }
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dateKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const count = completedCalData.get(dateKey) || 0;
+    const isFuture = dateKey > bounds.todayKey;
+    const isToday = dateKey === bounds.todayKey;
+    const isActive = isCurrent && dateKey === completedCalSelectedDate;
+
+    if (count > 0) {
+      totalCount += count;
+      activeDays++;
+    }
+
+    const cell = document.createElement('button');
+    cell.type = 'button';
+    cell.className = [
+      'taski-calendar-day',
+      count > 0 ? 'has-tasks' : '',
+      isToday ? 'is-today' : '',
+      isActive ? 'is-active-day' : '',
+      isFuture ? 'is-future' : ''
+    ].filter(Boolean).join(' ');
+    cell.dataset.date = dateKey;
+    cell.tabIndex = isCurrent && !isFuture ? 0 : -1;
+    cell.disabled = isFuture;
+    cell.innerHTML = `<span>${day}</span>`;
+
+    if (isFuture) {
+      cell.title = 'Future date';
+      cell.setAttribute('aria-label', `${day}, ${MONTH_NAMES[month]} ${year} — future date`);
+    } else if (count > 0) {
+      cell.title = `${count} ${count === 1 ? 'completed task' : 'completed tasks'} · Jump to date`;
+      cell.setAttribute('aria-label', `${day}, ${MONTH_NAMES[month]} ${year} — ${count} completed ${count === 1 ? 'task' : 'tasks'}. Jump to date.`);
+    } else {
+      cell.title = 'No completed tasks · Jump to nearest date';
+      cell.setAttribute('aria-label', `${day}, ${MONTH_NAMES[month]} ${year} — no completed tasks. Jump to nearest date.`);
+    }
+
+    if (isCurrent && !isFuture) {
+      cell.addEventListener('click', (e) => {
+        if (completedCalWasDragging) {
+          e.preventDefault();
+          return;
+        }
+        handleCompletedCalendarDateSelect(dateKey, count > 0);
+      });
+    }
+
+    fragment.appendChild(cell);
+  }
+
+  const rendered = firstDayIndex + daysInMonth;
+  for (let i = rendered; i < 42; i++) {
+    const empty = document.createElement('div');
+    empty.className = 'taski-calendar-day empty';
+    empty.setAttribute('aria-hidden', 'true');
+    fragment.appendChild(empty);
+  }
+
+  container.appendChild(fragment);
+  return { count: totalCount, days: activeDays };
+}
+
+function updateCompletedCalendarStats(stats) {
+  if (DOM.calendarTitle) {
+    DOM.calendarTitle.textContent = `${MONTH_NAMES[completedCalMonth]} ${completedCalYear}`;
+  }
+  if (DOM.calendarMonthCount) {
+    DOM.calendarMonthCount.textContent = `${stats.count} ${stats.count === 1 ? 'task' : 'tasks'}`;
+  }
+  if (DOM.calendarMonthDays) {
+    DOM.calendarMonthDays.textContent = `${stats.days} ${stats.days === 1 ? 'day' : 'days'}`;
+  }
+}
+
+function renderCompletedCalendarGrid() {
+  if (!DOM.calendarGrid) return;
+
+  const bounds = getCalendarBounds();
+  if (isCalendarMonthFuture(completedCalYear, completedCalMonth, bounds)) {
+    completedCalYear = bounds.year;
+    completedCalMonth = bounds.month;
+  }
+
+  completedCalData = collectCompletedCalendarData();
+
+  if (DOM.calendarTrack) {
+    DOM.calendarTrack.classList.remove('animating');
+    DOM.calendarTrack.style.transform = 'translate3d(-33.333333%, 0, 0)';
+  }
+
+  const stats = renderCompletedCalendarMonth(
+    completedCalYear,
+    completedCalMonth,
+    DOM.calendarGrid,
+    true
+  );
+  updateCompletedCalendarStats(stats);
+
+  let prevMonth = completedCalMonth - 1;
+  let prevYear = completedCalYear;
+  if (prevMonth < 0) {
+    prevMonth = 11;
+    prevYear--;
+  }
+  renderCompletedCalendarMonth(prevYear, prevMonth, DOM.calendarGridPrev, false);
+
+  let nextMonth = completedCalMonth + 1;
+  let nextYear = completedCalYear;
+  if (nextMonth > 11) {
+    nextMonth = 0;
+    nextYear++;
+  }
+
+  if (DOM.calendarGridNext) {
+    if (isCalendarMonthFuture(nextYear, nextMonth, bounds)) {
+      DOM.calendarGridNext.replaceChildren();
+    } else {
+      renderCompletedCalendarMonth(nextYear, nextMonth, DOM.calendarGridNext, false);
+    }
+  }
+}
+
+function finishCompletedCalendarSwipe(direction) {
+  const track = DOM.calendarTrack;
+  if (!track) return;
+
+  const bounds = getCalendarBounds();
+  if (direction === 1) {
+    let nextMonth = completedCalMonth + 1;
+    let nextYear = completedCalYear;
+    if (nextMonth > 11) {
+      nextMonth = 0;
+      nextYear++;
+    }
+    if (isCalendarMonthFuture(nextYear, nextMonth, bounds)) direction = 0;
+  }
+
+  completedCalMonthTransitioning = true;
+  track.classList.add('animating');
+
+  if (direction === 1) {
+    track.style.transform = 'translate3d(-66.666667%, 0, 0)';
+  } else if (direction === -1) {
+    track.style.transform = 'translate3d(0%, 0, 0)';
+  } else {
+    track.style.transform = 'translate3d(-33.333333%, 0, 0)';
+  }
+
+  let handled = false;
+  const onEnd = (event) => {
+    // Ignore transitionend events bubbled up from the day cells. Only the
+    // track's own transform change marks the month swipe as finished.
+    if (event && event.target !== track) return;
+    if (handled) return;
+    handled = true;
+    track.removeEventListener('transitionend', onEnd);
+    track.classList.remove('animating');
+
+    if (direction === 1) {
+      completedCalMonth++;
+      if (completedCalMonth > 11) {
+        completedCalMonth = 0;
+        completedCalYear++;
+      }
+    } else if (direction === -1) {
+      completedCalMonth--;
+      if (completedCalMonth < 0) {
+        completedCalMonth = 11;
+        completedCalYear--;
+      }
+    }
+
+    completedCalMonthTransitioning = false;
+    renderCompletedCalendarGrid();
+  };
+
+  track.addEventListener('transitionend', onEnd);
+  setTimeout(() => {
+    if (!handled) onEnd();
+  }, 360);
+}
+
+function navigateCompletedCalendarMonth(direction) {
+  if (completedCalMonthTransitioning || completedCalMonthDragging) return;
+
+  if (direction === 1) {
+    let nextMonth = completedCalMonth + 1;
+    let nextYear = completedCalYear;
+    if (nextMonth > 11) {
+      nextMonth = 0;
+      nextYear++;
+    }
+    if (isCalendarMonthFuture(nextYear, nextMonth)) return;
+  }
+
+  finishCompletedCalendarSwipe(direction);
+}
+
+function createCompletedCalendarDrum({ drumEl, wheelEl, count, onSelect, maxIndex }) {
+  let currentIndex = 0;
+  let currentY = 0;
+  let isDragging = false;
+  let startY = 0;
+  let startDragY = 0;
+  let startTime = 0;
+  let activePointerId = null;
+  let limit = Math.max(0, Math.min(count - 1, maxIndex === undefined ? count - 1 : maxIndex));
+
+  const getItems = () => wheelEl.querySelectorAll('.taski-calendar-drum-item');
+
+  function applyDisabledStates() {
+    const items = getItems();
+    for (let i = 0; i < items.length; i++) {
+      items[i].classList.toggle('is-disabled', i > limit);
+    }
+  }
+
+  function updateVisuals(activeIdx) {
+    const items = getItems();
+    for (let i = 0; i < items.length; i++) {
+      items[i].classList.toggle('is-selected', i === activeIdx);
+    }
+  }
+
+  function setIndex(index, animated = true) {
+    const clamped = Math.max(0, Math.min(limit, index));
+    currentIndex = clamped;
+    currentY = -clamped * CAL_DIAL_ITEM_HEIGHT;
+
+    if (animated) {
+      wheelEl.classList.add('animating');
+    } else {
+      wheelEl.classList.remove('animating');
+    }
+
+    wheelEl.style.transform = `translate3d(0, ${currentY}px, 0)`;
+    updateVisuals(clamped);
+    if (onSelect) onSelect(clamped);
+
+    if (animated) {
+      const handleEnd = (event) => {
+        if (event && event.target !== wheelEl) return;
+        wheelEl.removeEventListener('transitionend', handleEnd);
+        wheelEl.classList.remove('animating');
+      };
+      wheelEl.addEventListener('transitionend', handleEnd);
+    }
+  }
+
+  function setMaxIndex(nextMax, animated = false) {
+    limit = Math.max(0, Math.min(count - 1, nextMax));
+    applyDisabledStates();
+    if (currentIndex > limit) setIndex(limit, animated);
+  }
+
+  function onPointerDown(e) {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    isDragging = true;
+    wheelEl.classList.remove('animating');
+    startY = e.clientY;
+    startDragY = currentY;
+    startTime = Date.now();
+    activePointerId = e.pointerId;
+    try { drumEl.setPointerCapture(e.pointerId); } catch (_) {}
+  }
+
+  function onPointerMove(e) {
+    if (!isDragging || e.pointerId !== activePointerId) return;
+    if (e.cancelable) e.preventDefault();
+
+    const delta = e.clientY - startY;
+    let targetY = startDragY + delta;
+    const minY = -limit * CAL_DIAL_ITEM_HEIGHT;
+    const maxY = 0;
+
+    if (targetY > maxY) {
+      targetY = maxY + (targetY - maxY) * 0.3;
+    } else if (targetY < minY) {
+      targetY = minY + (targetY - minY) * 0.3;
+    }
+
+    currentY = targetY;
+    wheelEl.style.transform = `translate3d(0, ${currentY}px, 0)`;
+
+    const liveIndex = Math.max(0, Math.min(limit, Math.round(-currentY / CAL_DIAL_ITEM_HEIGHT)));
+    updateVisuals(liveIndex);
+  }
+
+  function onPointerUp(e) {
+    if (!isDragging || e.pointerId !== activePointerId) return;
+    isDragging = false;
+    try { drumEl.releasePointerCapture(e.pointerId); } catch (_) {}
+
+    const delta = e.clientY - startY;
+    const elapsed = Math.max(1, Date.now() - startTime);
+    const velocity = delta / elapsed;
+    const projectedY = currentY + velocity * 130;
+    let snapIndex = Math.round(-projectedY / CAL_DIAL_ITEM_HEIGHT);
+    snapIndex = Math.max(0, Math.min(limit, snapIndex));
+    setIndex(snapIndex, true);
+  }
+
+  function onWheel(e) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (isDragging) return;
+
+    const step = e.deltaY > 0 ? 1 : -1;
+    const next = Math.max(0, Math.min(limit, currentIndex + step));
+    if (next !== currentIndex) setIndex(next, true);
+  }
+
+  function onClick(e) {
+    const item = e.target.closest('.taski-calendar-drum-item');
+    if (!item || item.classList.contains('is-disabled')) return;
+    const idx = parseInt(item.getAttribute('data-idx'), 10);
+    if (!isNaN(idx)) setIndex(idx, true);
+  }
+
+  drumEl.addEventListener('pointerdown', onPointerDown);
+  drumEl.addEventListener('pointermove', onPointerMove);
+  drumEl.addEventListener('pointerup', onPointerUp);
+  drumEl.addEventListener('pointercancel', onPointerUp);
+  drumEl.addEventListener('wheel', onWheel, { passive: false });
+  wheelEl.addEventListener('click', onClick);
+
+  applyDisabledStates();
+
+  return {
+    setIndex,
+    getIndex: () => currentIndex,
+    setMaxIndex,
+    destroy() {
+      drumEl.removeEventListener('pointerdown', onPointerDown);
+      drumEl.removeEventListener('pointermove', onPointerMove);
+      drumEl.removeEventListener('pointerup', onPointerUp);
+      drumEl.removeEventListener('pointercancel', onPointerUp);
+      drumEl.removeEventListener('wheel', onWheel);
+      wheelEl.removeEventListener('click', onClick);
+      wheelEl.classList.remove('animating');
+    }
+  };
+}
+
+function destroyCompletedCalendarDrums() {
+  if (completedCalMonthWheel) {
+    completedCalMonthWheel.destroy();
+    completedCalMonthWheel = null;
+  }
+  if (completedCalYearWheel) {
+    completedCalYearWheel.destroy();
+    completedCalYearWheel = null;
+  }
+}
+
+function buildCompletedCalendarDrums() {
+  if (!DOM.calendarMonthWheel || !DOM.calendarYearWheel) return;
+
+  destroyCompletedCalendarDrums();
+
+  const bounds = getCalendarBounds();
+  let earliestYear = bounds.year;
+  for (let i = 0; i < tasks.length; i++) {
+    const task = tasks[i];
+    if (!task.completed) continue;
+    const completedAt = getTaskCompletionTime(task);
+    if (!completedAt) continue;
+    const year = new Date(completedAt).getFullYear();
+    if (year < earliestYear) earliestYear = year;
+  }
+
+  const minYear = Math.min(CAL_DIAL_MIN_YEAR, earliestYear);
+  completedCalDialYears = [];
+  for (let year = minYear; year <= bounds.year; year++) {
+    completedCalDialYears.push(year);
+  }
+
+  let monthHtml = '';
+  for (let i = 0; i < MONTH_NAMES.length; i++) {
+    monthHtml += `<div class="taski-calendar-drum-item" data-idx="${i}">${MONTH_NAMES[i]}</div>`;
+  }
+  DOM.calendarMonthWheel.innerHTML = monthHtml;
+
+  let yearHtml = '';
+  for (let i = 0; i < completedCalDialYears.length; i++) {
+    yearHtml += `<div class="taski-calendar-drum-item" data-idx="${i}">${completedCalDialYears[i]}</div>`;
+  }
+  DOM.calendarYearWheel.innerHTML = yearHtml;
+
+  completedCalMonthWheel = createCompletedCalendarDrum({
+    drumEl: DOM.calendarMonthDrum,
+    wheelEl: DOM.calendarMonthWheel,
+    count: 12,
+    onSelect: (idx) => {
+      completedCalPendingMonth = idx;
+    }
+  });
+
+  completedCalYearWheel = createCompletedCalendarDrum({
+    drumEl: DOM.calendarYearDrum,
+    wheelEl: DOM.calendarYearWheel,
+    count: completedCalDialYears.length,
+    onSelect: (idx) => {
+      if (completedCalDialYears[idx] === undefined) return;
+      completedCalPendingYear = completedCalDialYears[idx];
+      if (completedCalMonthWheel) {
+        const maxMonth = completedCalPendingYear === bounds.year ? bounds.month : 11;
+        completedCalMonthWheel.setMaxIndex(maxMonth, true);
+      }
+    }
+  });
+}
+
+function openCompletedCalendarDialView() {
+  if (!DOM.calendarDialView || !DOM.calendarMainView) return;
+
+  const bounds = getCalendarBounds();
+  completedCalDialOpen = true;
+  completedCalPendingYear = completedCalYear;
+  completedCalPendingMonth = Math.min(
+    completedCalMonth,
+    completedCalYear === bounds.year ? bounds.month : 11
+  );
+
+  buildCompletedCalendarDrums();
+
+  DOM.calendarMainView.style.display = 'none';
+  DOM.calendarDialView.style.display = 'flex';
+  if (DOM.calendarShell) DOM.calendarShell.classList.add('is-dial-open');
+  if (DOM.calendarTitleBtn) {
+    DOM.calendarTitleBtn.classList.add('is-open');
+    DOM.calendarTitleBtn.setAttribute('aria-expanded', 'true');
+  }
+
+  if (completedCalMonthWheel) {
+    const maxMonth = completedCalPendingYear === bounds.year ? bounds.month : 11;
+    completedCalMonthWheel.setMaxIndex(maxMonth, false);
+    completedCalMonthWheel.setIndex(completedCalPendingMonth, false);
+  }
+
+  if (completedCalYearWheel) {
+    const yearIndex = completedCalDialYears.indexOf(completedCalPendingYear);
+    completedCalYearWheel.setIndex(yearIndex >= 0 ? yearIndex : completedCalDialYears.length - 1, false);
+  }
+}
+
+function closeCompletedCalendarDialView(applyChanges = true) {
+  if (!DOM.calendarDialView || !DOM.calendarMainView) return;
+
+  completedCalDialOpen = false;
+
+  if (applyChanges) {
+    const bounds = getCalendarBounds();
+    let year = completedCalPendingYear;
+    let month = completedCalPendingMonth;
+
+    if (!Number.isFinite(year)) year = completedCalYear;
+    if (!Number.isFinite(month)) month = completedCalMonth;
+    if (month < 0 || month > 11) month = bounds.month;
+
+    if (year > bounds.year || (year === bounds.year && month > bounds.month)) {
+      year = bounds.year;
+      month = bounds.month;
+    }
+
+    completedCalYear = year;
+    completedCalMonth = month;
+  }
+
+  DOM.calendarDialView.style.display = 'none';
+  DOM.calendarMainView.style.display = 'flex';
+  if (DOM.calendarShell) DOM.calendarShell.classList.remove('is-dial-open');
+  if (DOM.calendarTitleBtn) {
+    DOM.calendarTitleBtn.classList.remove('is-open');
+    DOM.calendarTitleBtn.setAttribute('aria-expanded', 'false');
+  }
+
+  destroyCompletedCalendarDrums();
+
+  if (applyChanges) renderCompletedCalendarGrid();
+}
+
+function toggleCompletedCalendarDialView() {
+  if (completedCalDialOpen) {
+    closeCompletedCalendarDialView(true);
+  } else {
+    openCompletedCalendarDialView();
+  }
+}
+
+function stopCompletedCalendarClock() {
+  if (completedCalBoundaryTimer) {
+    clearInterval(completedCalBoundaryTimer);
+    completedCalBoundaryTimer = 0;
+  }
+}
+
+function startCompletedCalendarClock() {
+  stopCompletedCalendarClock();
+  completedCalBoundaryTimer = setInterval(() => {
+    const dialog = DOM.calendarDialog;
+    if (!dialog || !dialog.open) {
+      stopCompletedCalendarClock();
+      return;
+    }
+
+    const todayKey = formatCalendarDayKey();
+    if (todayKey === completedCalLastTodayKey) return;
+
+    const previousParts = completedCalLastTodayKey.split('-');
+    const previousYear = parseInt(previousParts[0], 10);
+    const previousMonth = parseInt(previousParts[1], 10) - 1;
+    const wasShowingLatestMonth = completedCalYear === previousYear && completedCalMonth === previousMonth;
+
+    completedCalLastTodayKey = todayKey;
+    const bounds = getCalendarBounds();
+
+    if (completedCalDialOpen) {
+      if (completedCalPendingYear === bounds.year && completedCalMonthWheel) {
+        completedCalMonthWheel.setMaxIndex(bounds.month, true);
+      }
+      return;
+    }
+
+    if (wasShowingLatestMonth) {
+      completedCalYear = bounds.year;
+      completedCalMonth = bounds.month;
+    }
+    renderCompletedCalendarGrid();
+  }, 60000);
+}
+
+function showCompletedCalendarToast(message) {
+  if (!DOM.calendarToast) return;
+
+  DOM.calendarToast.textContent = message;
+  DOM.calendarToast.classList.remove('is-visible');
+  void DOM.calendarToast.offsetWidth;
+  DOM.calendarToast.classList.add('is-visible');
+
+  if (completedCalToastTimer) clearTimeout(completedCalToastTimer);
+  completedCalToastTimer = setTimeout(() => {
+    DOM.calendarToast.classList.remove('is-visible');
+    completedCalToastTimer = 0;
+  }, 2400);
+}
+
+function openCompletedCalendarDialog() {
+  const dialog = DOM.calendarDialog;
+  if (!dialog) return;
+
+  if (completedCalCloseTimer) {
+    clearTimeout(completedCalCloseTimer);
+    completedCalCloseTimer = 0;
+  }
+
+  closeCompletedCalendarDialView(false);
+
+  const bounds = getCalendarBounds();
+  completedCalYear = bounds.year;
+  completedCalMonth = bounds.month;
+  completedCalSelectedDate = bounds.todayKey;
+  completedCalLastTodayKey = bounds.todayKey;
+
+  dialog.classList.remove('is-closing');
+  if (typeof dialog.showModal === 'function') {
+    if (!dialog.open) dialog.showModal();
+  } else {
+    dialog.setAttribute('open', '');
+  }
+
+  renderCompletedCalendarGrid();
+  startCompletedCalendarClock();
+}
+
+function closeCompletedCalendarDialog(onClosed) {
+  const dialog = DOM.calendarDialog;
+  if (!dialog || !dialog.open) {
+    if (onClosed) onClosed();
+    return;
+  }
+
+  closeCompletedCalendarDialView(false);
+  dialog.classList.add('is-closing');
+
+  if (completedCalCloseTimer) clearTimeout(completedCalCloseTimer);
+  completedCalCloseTimer = setTimeout(() => {
+    completedCalCloseTimer = 0;
+    dialog.classList.remove('is-closing');
+    if (dialog.open) {
+      if (typeof dialog.close === 'function') dialog.close();
+      else dialog.removeAttribute('open');
+    }
+    stopCompletedCalendarClock();
+    if (onClosed) onClosed();
+  }, 180);
+}
+
+function handleCompletedCalendarDateSelect(dateKey, hasTasks) {
+  if (completedCalWasDragging) return;
+  if (dateKey > formatCalendarDayKey()) return;
+
+  completedCalSelectedDate = dateKey;
+  completedCalData = collectCompletedCalendarData();
+
+  let targetDate = dateKey;
+  if (!hasTasks || !completedCalData.has(dateKey)) {
+    const sortedKeys = Array.from(completedCalData.keys()).sort();
+    if (!sortedKeys.length) {
+      closeCompletedCalendarDialog();
+      showCompletedCalendarToast('No completed tasks yet');
+      return;
+    }
+
+    targetDate = findNearestCompletedCalendarDate(dateKey, sortedKeys);
+    if (targetDate !== dateKey) {
+      showCompletedCalendarToast(`Nearest completed day · ${formatCalendarDateLabel(targetDate)}`);
+    }
+  }
+
+  closeCompletedCalendarDialog(() => {
+    if (DOM.completedPanel.classList.contains('hidden')) return;
+
+    renderCompletedTasks({ animate: false });
+    const virtualizer = getCompletedVirtualizer();
+    virtualizer.scrollToDate(targetDate);
+  });
+}
+
+function handleCompletedCalendarShortcut(jumpType) {
+  completedCalData = collectCompletedCalendarData();
+  const sortedKeys = Array.from(completedCalData.keys()).sort();
+
+  if (!sortedKeys.length) {
+    closeCompletedCalendarDialog(() => {
+      showCompletedCalendarToast('No completed tasks yet');
+    });
+    return;
+  }
+
+  const todayKey = formatCalendarDayKey();
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayKey = formatCalendarDayKey(yesterday);
+
+  let targetDate = '';
+  if (jumpType === 'today') {
+    targetDate = todayKey;
+  } else if (jumpType === 'yesterday') {
+    targetDate = yesterdayKey;
+  } else if (jumpType === 'latest') {
+    targetDate = sortedKeys[sortedKeys.length - 1];
+  } else if (jumpType === 'first') {
+    targetDate = sortedKeys[0];
+  }
+
+  if (!targetDate) return;
+  handleCompletedCalendarDateSelect(targetDate, completedCalData.has(targetDate));
+}
+
+function setupCompletedCalendarViewportGestures() {
+  const viewport = DOM.calendarViewport;
+  const track = DOM.calendarTrack;
+  if (!viewport || !track) return;
+
+  let startX = 0;
+  let startY = 0;
+  let diffX = 0;
+  let diffY = 0;
+  let startTime = 0;
+  let isLockedHorizontal = false;
+  let viewportWidth = 0;
+  let activePointerId = null;
+
+  const onPointerDown = (e) => {
+    if (completedCalMonthTransitioning) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+
+    completedCalMonthDragging = true;
+    completedCalWasDragging = false;
+    isLockedHorizontal = false;
+    startX = e.clientX;
+    startY = e.clientY;
+    diffX = 0;
+    diffY = 0;
+    startTime = Date.now();
+    viewportWidth = viewport.clientWidth || 340;
+    activePointerId = e.pointerId;
+
+    track.classList.remove('animating');
+  };
+
+  const onPointerMove = (e) => {
+    if (!completedCalMonthDragging || e.pointerId !== activePointerId) return;
+
+    diffX = e.clientX - startX;
+    diffY = e.clientY - startY;
+
+    if (!isLockedHorizontal) {
+      if (Math.abs(diffY) > Math.abs(diffX) && Math.abs(diffY) > 8) {
+        completedCalMonthDragging = false;
+        completedCalWasDragging = true;
+        track.style.transform = 'translate3d(-33.333333%, 0, 0)';
+        try { viewport.releasePointerCapture(e.pointerId); } catch (_) {}
+        setTimeout(() => { completedCalWasDragging = false; }, 80);
+        return;
+      }
+      if (Math.abs(diffX) > 6) {
+        isLockedHorizontal = true;
+        completedCalWasDragging = true;
+        try { viewport.setPointerCapture(e.pointerId); } catch (_) {}
+      }
+    }
+
+    if (isLockedHorizontal) {
+      if (e.cancelable) e.preventDefault();
+
+      let dampedDiffX = diffX;
+      if (diffX > viewportWidth) {
+        dampedDiffX = viewportWidth + (diffX - viewportWidth) * 0.35;
+      } else if (diffX < -viewportWidth) {
+        dampedDiffX = -viewportWidth + (diffX + viewportWidth) * 0.35;
+      }
+
+      const currentOffsetPx = -viewportWidth + dampedDiffX;
+      track.style.transform = `translate3d(${currentOffsetPx}px, 0, 0)`;
+    }
+  };
+
+  const onPointerUp = (e) => {
+    if (!completedCalMonthDragging || e.pointerId !== activePointerId) return;
+    completedCalMonthDragging = false;
+    try { viewport.releasePointerCapture(e.pointerId); } catch (_) {}
+
+    if (!isLockedHorizontal) {
+      track.style.transform = 'translate3d(-33.333333%, 0, 0)';
+      setTimeout(() => { completedCalWasDragging = false; }, 60);
+      return;
+    }
+
+    const elapsed = Math.max(1, Date.now() - startTime);
+    const velocity = diffX / elapsed;
+    const threshold = viewportWidth * 0.2;
+
+    if (diffX < -threshold || velocity < -0.36) {
+      // finish() clamps a next-month swipe at the current month and
+      // snaps the track back home instead of leaving it displaced.
+      finishCompletedCalendarSwipe(1);
+    } else if (diffX > threshold || velocity > 0.36) {
+      finishCompletedCalendarSwipe(-1);
+    } else {
+      finishCompletedCalendarSwipe(0);
+    }
+
+    setTimeout(() => { completedCalWasDragging = false; }, 90);
+  };
+
+  viewport.addEventListener('pointerdown', onPointerDown);
+  viewport.addEventListener('pointermove', onPointerMove);
+  viewport.addEventListener('pointerup', onPointerUp);
+  viewport.addEventListener('pointercancel', onPointerUp);
+
+  viewport.addEventListener('wheel', (e) => {
+    if (completedCalMonthDragging) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (completedCalMonthTransitioning || completedCalWheelLock) return;
+
+    const absX = Math.abs(e.deltaX);
+    const absY = Math.abs(e.deltaY);
+    const useX = absX > absY;
+    const primary = useX ? e.deltaX : e.deltaY;
+    if (Math.abs(primary) < 1) return;
+
+    completedCalWheelAccumX += e.deltaX;
+    completedCalWheelAccumY += e.deltaY;
+
+    const total = useX ? completedCalWheelAccumX : completedCalWheelAccumY;
+    if (Math.abs(total) < 24) {
+      clearTimeout(completedCalWheelResetTimer);
+      completedCalWheelResetTimer = setTimeout(() => {
+        completedCalWheelAccumX = 0;
+        completedCalWheelAccumY = 0;
+      }, 150);
+      return;
+    }
+
+    const direction = total > 0 ? 1 : -1;
+    completedCalWheelAccumX = 0;
+    completedCalWheelAccumY = 0;
+    completedCalWheelLock = true;
+    navigateCompletedCalendarMonth(direction);
+    setTimeout(() => { completedCalWheelLock = false; }, 320);
+  }, { passive: false });
+}
+
+function initCompletedCalendarEvents() {
+  const dialog = DOM.calendarDialog;
+  if (!dialog) return;
+
+  if (DOM.completedCalendarBtn) {
+    DOM.completedCalendarBtn.addEventListener('click', openCompletedCalendarDialog);
+  }
+
+  if (DOM.calendarCloseBtn) {
+    DOM.calendarCloseBtn.addEventListener('click', () => closeCompletedCalendarDialog());
+  }
+
+  if (DOM.calendarTitleBtn) {
+    DOM.calendarTitleBtn.addEventListener('click', toggleCompletedCalendarDialView);
+  }
+
+  if (DOM.calendarDialDone) {
+    DOM.calendarDialDone.addEventListener('click', () => closeCompletedCalendarDialView(true));
+  }
+
+  dialog.addEventListener('click', (e) => {
+    if (e.target === dialog) closeCompletedCalendarDialog();
+  });
+
+  dialog.addEventListener('cancel', (e) => {
+    e.preventDefault();
+    closeCompletedCalendarDialog();
+  });
+
+  dialog.addEventListener('close', () => {
+    dialog.classList.remove('is-closing');
+    stopCompletedCalendarClock();
+    closeCompletedCalendarDialView(false);
+  });
+
+  dialog.addEventListener('keydown', (e) => {
+    if (completedCalDialOpen) return;
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      navigateCompletedCalendarMonth(-1);
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      navigateCompletedCalendarMonth(1);
+    }
+  });
+
+  document.querySelectorAll('.taski-calendar-pill').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      handleCompletedCalendarShortcut(btn.getAttribute('data-jump'));
+    });
+  });
+
+  setupCompletedCalendarViewportGestures();
+}
+
+initCompletedCalendarEvents();
 
 
 // ══════════════════════════════════
