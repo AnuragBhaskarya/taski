@@ -103,7 +103,7 @@ function createDateHeaderElement(timestamp) {
 // ══════════════════════════════════════════════════════════════════
 
 const ACTIVE_REVEAL_INSET = 8;    // px inside the viewport where the reveal starts
-const ACTIVE_REVEAL_RESET = 0;    // re-arm as soon as a card is fully out
+const ACTIVE_REVEAL_GUARD = 1;    // full cards kept solid beyond each edge
 const ACTIVE_STAGGER = 35;
 const ACTIVE_STAGGER_MAX = 140;
 const REVEAL_EXIT_MS = 850;       // slightly longer than the 0.8s transform
@@ -116,7 +116,11 @@ let activeGeometryRaf = 0;
 const revealedActiveTaskIds = new Set();
 
 function getActiveViewport() {
-  const viewTop = DOM.main.scrollTop;
+  // Elastic overscroll can report a scrollTop outside the real range.
+  // Clamp it so the row that still fits at the edge does not look like
+  // it left the viewport during a rubber-band bounce.
+  const maxScroll = Math.max(0, DOM.main.scrollHeight - DOM.main.clientHeight);
+  const viewTop = Math.min(Math.max(0, DOM.main.scrollTop), maxScroll);
   return { viewTop, viewBottom: viewTop + DOM.main.clientHeight };
 }
 
@@ -251,8 +255,11 @@ function updateActiveReveal() {
     }
     // The lifted card lives on <body> while dragging; never reset it.
     if (el.classList.contains('drag-active')) continue;
-    if (card.bottom < viewTop - ACTIVE_REVEAL_RESET ||
-        card.top > viewBottom + ACTIVE_REVEAL_RESET) {
+    // Keep one full card solid beyond each edge. A fast reversal then
+    // finds the row already in place instead of replaying its entrance.
+    const guard = (card.bottom - card.top) * ACTIVE_REVEAL_GUARD;
+    if (card.bottom < viewTop - guard ||
+        card.top > viewBottom + guard) {
       resetActiveTask(el);
     }
   }
@@ -846,7 +853,7 @@ function renderActiveTasks() {
 
 const COMPLETED_OVERSCAN = 320;    // px mounted above/below the viewport
 const COMPLETED_REVEAL_INSET = 8;  // px inside the viewport where the reveal starts
-const COMPLETED_REVEAL_RESET = 0;  // re-arm as soon as a row is fully out
+const COMPLETED_REVEAL_GUARD = 1;  // full rows kept solid beyond each edge
 const COMPLETED_STAGGER = 35;
 const COMPLETED_STAGGER_MAX = 140;
 
@@ -1447,8 +1454,11 @@ class CompletedVirtualizer {
   }
 
   revealItems(scrollTop, viewportHeight, animate, isInitial) {
-    const viewTop = scrollTop;
-    const viewBottom = scrollTop + viewportHeight;
+    // Clamp elastic overscroll so the rows that still fit at the edge
+    // stay solid while the scroll position springs back.
+    const maxScroll = Math.max(0, this.container.scrollHeight - this.container.clientHeight);
+    const viewTop = Math.min(Math.max(0, scrollTop), maxScroll);
+    const viewBottom = viewTop + viewportHeight;
     // On open, any partially visible row may animate. While scrolling,
     // wait until a few pixels are actually inside the viewport so the
     // swoop is visible on screen instead of firing below the fold.
@@ -1461,13 +1471,14 @@ class CompletedVirtualizer {
       const itemBottom = itemTop + this.heights[idx];
 
       if (el.classList.contains('is-visible')) {
-        // Re-arm rows once they are clearly outside the viewport, so
-        // reversing scroll direction animates them again instead of
-        // showing a few pre-revealed solid cards next to the viewport.
-        // Remove is-visible (not is-instant) so they play the entrance
-        // backwards on the way out instead of popping away.
-        if (itemBottom < viewTop - COMPLETED_REVEAL_RESET ||
-            itemTop > viewBottom + COMPLETED_REVEAL_RESET) {
+        // Keep one full row solid beyond each edge. A quick reversal
+        // then finds the row in place instead of replaying its entrance;
+        // only rows clearly outside that guard re-arm. Remove is-visible
+        // (not is-instant) so they play the entrance backwards on the way
+        // out instead of popping away.
+        const guard = this.heights[idx] * COMPLETED_REVEAL_GUARD;
+        if (itemBottom < viewTop - guard ||
+            itemTop > viewBottom + guard) {
           if (el.__completedExitTimer) {
             clearTimeout(el.__completedExitTimer);
             el.__completedExitTimer = null;
