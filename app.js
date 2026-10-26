@@ -843,6 +843,8 @@ class CompletedVirtualizer {
     this.heightCache = new Map();
     this.metrics = null;
     this.metricsWidth = -1;
+    this.pendingStripes = [];
+    this.previousStripes = null;
 
     this.topSpacer = document.createElement('li');
     this.topSpacer.className = 'completed-spacer';
@@ -885,9 +887,36 @@ class CompletedVirtualizer {
     }
 
     const el = createTaskElement(item.task, true);
-    el.classList.add(item.ordinal % 2 === 0 ? 'is-odd' : 'is-even');
+    const stripe = item.ordinal % 2 === 0 ? 'is-odd' : 'is-even';
+    const previous = this.previousStripes && this.previousStripes.get(item.task.id);
+    if (previous && previous !== stripe) {
+      // Start from the row's old stripe so a rebuild after a deletion
+      // can fade to the new parity instead of snapping.
+      el.classList.add(previous);
+      this.pendingStripes.push({ el, stripe });
+    } else {
+      el.classList.add(stripe);
+    }
     if (item.isLast) el.classList.add('is-last');
     return el;
+  }
+
+  flushStripeTransitions() {
+    this.previousStripes = null;
+    if (!this.pendingStripes.length) return;
+
+    // Resolve the carried-over colours before swapping classes. One
+    // layout flush lets the background-color transition interpolate
+    // from the old stripe to the new one.
+    void this.container.offsetWidth;
+    const pending = this.pendingStripes;
+    this.pendingStripes = [];
+    for (let i = 0; i < pending.length; i++) {
+      const { el, stripe } = pending[i];
+      if (!el.isConnected) continue;
+      el.classList.remove('is-odd', 'is-even');
+      el.classList.add(stripe);
+    }
   }
 
   measureMetrics() {
@@ -1011,6 +1040,22 @@ class CompletedVirtualizer {
   setItems(items, { animateInitial = false, resetScroll = false } = {}) {
     const oldScrollTop = this.container.scrollTop;
 
+    // Remember the stripe each mounted task had before the rebuild.
+    // Deletions shift every following ordinal, so recreating the rows
+    // must carry the old colour over to keep the parity change smooth.
+    const previousStripes = new Map();
+    for (const [idx, el] of this.mounted) {
+      const oldItem = this.items[idx];
+      if (!oldItem || oldItem.type !== 'task') continue;
+      if (!el.isConnected || el.parentNode !== this.container) continue;
+      previousStripes.set(
+        oldItem.task.id,
+        el.classList.contains('is-odd') ? 'is-odd' : 'is-even'
+      );
+    }
+    this.previousStripes = previousStripes.size ? previousStripes : null;
+    this.pendingStripes = [];
+
     this.items = items;
 
     const liveKeys = new Set(items.map(item => item.key));
@@ -1050,6 +1095,7 @@ class CompletedVirtualizer {
       : Math.min(oldScrollTop, Math.max(0, this.container.scrollHeight - this.container.clientHeight));
 
     this.updateWindow(true, animateInitial);
+    this.flushStripeTransitions();
   }
 
   getVisibleRange(scrollTop, viewportHeight) {
