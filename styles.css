@@ -1263,6 +1263,20 @@ main::-webkit-scrollbar-thumb {
   transform: scale(.985);
 }
 
+/* Lock every page scroller while the calendar dialog is open */
+html.calendar-scroll-lock,
+html.calendar-scroll-lock body {
+  overflow: hidden !important;
+  overscroll-behavior: none !important;
+}
+
+html.calendar-scroll-lock main,
+html.calendar-scroll-lock .completed-task-list {
+  overflow: hidden !important;
+  overscroll-behavior: none !important;
+  touch-action: none;
+}
+
 /* Small jump confirmation (only shown when a date without tasks snaps nearby) */
 .taski-calendar-toast {
   position: fixed;

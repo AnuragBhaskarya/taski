@@ -1926,6 +1926,32 @@ let completedCalWheelLock = false;
 let completedCalWheelAccumX = 0;
 let completedCalWheelAccumY = 0;
 let completedCalWheelResetTimer = 0;
+let completedCalendarScrollLock = null;
+
+function lockCompletedCalendarScroll() {
+  if (completedCalendarScrollLock) return;
+
+  completedCalendarScrollLock = {
+    html: document.documentElement.style.overflow,
+    body: document.body.style.overflow,
+    main: DOM.main.style.overflow
+  };
+
+  document.documentElement.style.overflow = 'hidden';
+  document.body.style.overflow = 'hidden';
+  DOM.main.style.overflow = 'hidden';
+  document.documentElement.classList.add('calendar-scroll-lock');
+}
+
+function unlockCompletedCalendarScroll() {
+  if (!completedCalendarScrollLock) return;
+
+  document.documentElement.style.overflow = completedCalendarScrollLock.html;
+  document.body.style.overflow = completedCalendarScrollLock.body;
+  DOM.main.style.overflow = completedCalendarScrollLock.main;
+  document.documentElement.classList.remove('calendar-scroll-lock');
+  completedCalendarScrollLock = null;
+}
 
 function formatCalendarDayKey(date = new Date()) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -2575,6 +2601,7 @@ function openCompletedCalendarDialog() {
     dialog.setAttribute('open', '');
   }
 
+  lockCompletedCalendarScroll();
   renderCompletedCalendarGrid();
   startCompletedCalendarClock();
 }
@@ -2582,6 +2609,7 @@ function openCompletedCalendarDialog() {
 function closeCompletedCalendarDialog(onClosed) {
   const dialog = DOM.calendarDialog;
   if (!dialog || !dialog.open) {
+    unlockCompletedCalendarScroll();
     if (onClosed) onClosed();
     return;
   }
@@ -2835,6 +2863,7 @@ function initCompletedCalendarEvents() {
     dialog.classList.remove('is-closing');
     stopCompletedCalendarClock();
     closeCompletedCalendarDialView(false);
+    unlockCompletedCalendarScroll();
   });
 
   dialog.addEventListener('keydown', (e) => {
