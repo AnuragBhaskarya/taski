@@ -91,6 +91,212 @@ function createDateHeaderElement(timestamp) {
   return li;
 }
 
+// ══════════════════════════════════════════════════════════════════
+//  Active List — first-load / scroll reveal
+//  Active tasks stay fully rendered, but their hidden transform makes
+//  IntersectionObserver unreliable (the translated box can sit outside
+//  the root). So layout offsets are cached once per render/resize and a
+//  rAF-throttled scroll pass only touches the few cards near the
+//  viewport. Cards re-arm after they leave, so scrolling either way
+//  animates the incoming cards. Rebuilds and tick/untick never replay
+//  the entrance for a card that is already known.
+// ══════════════════════════════════════════════════════════════════
+
+const ACTIVE_REVEAL_INSET = 8;    // px inside the viewport where the reveal starts
+const ACTIVE_REVEAL_RESET = 0;    // re-arm as soon as a card is fully out
+const ACTIVE_STAGGER = 35;
+const ACTIVE_STAGGER_MAX = 140;
+
+let activeCards = [];
+let activeRevealed = new Set();
+let activeRevealRaf = 0;
+let activeRevealInitial = true;
+let activeGeometryRaf = 0;
+const revealedActiveTaskIds = new Set();
+
+function getActiveViewport() {
+  const viewTop = DOM.main.scrollTop;
+  return { viewTop, viewBottom: viewTop + DOM.main.clientHeight };
+}
+
+// Binary search: cards are in DOM order and do not overlap. tops and
+// bottoms are both sorted, so the visible slice can be found without
+// ever walking the full task list on scroll.
+function getActiveRange(topLimit, bottomLimit) {
+  const last = activeCards.length - 1;
+  if (last < 0) return { start: 0, end: -1 };
+
+  let low = 0;
+  let high = last;
+  let start = last + 1;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    if (activeCards[mid].bottom > topLimit) {
+      start = mid;
+      high = mid - 1;
+    } else {
+      low = mid + 1;
+    }
+  }
+
+  low = start;
+  high = last;
+  let end = start - 1;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    if (activeCards[mid].top < bottomLimit) {
+      end = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+
+  return { start, end };
+}
+
+function rebuildActiveGeometry() {
+  const list = DOM.taskList;
+  const base = list.offsetTop;
+  const cards = [];
+
+  for (const el of list.children) {
+    if (!el.classList.contains('topic-item')) continue;
+    const top = base + el.offsetTop;
+    const card = { el, top, bottom: top + el.offsetHeight };
+    el.__activeCard = card;
+    cards.push(card);
+  }
+
+  activeCards = cards;
+  for (const el of activeRevealed) {
+    if (!el.isConnected) activeRevealed.delete(el);
+  }
+}
+
+function revealActiveTaskNow(el, taskId) {
+  if (!el || !taskId) return;
+  revealedActiveTaskIds.add(taskId);
+  el.classList.add('is-instant', 'is-visible');
+  el.style.willChange = 'auto';
+  activeRevealed.add(el);
+}
+
+function resetActiveTask(el) {
+  if (el.__activeRevealTimer) {
+    clearTimeout(el.__activeRevealTimer);
+    el.__activeRevealTimer = null;
+  }
+  el.classList.add('is-instant');
+  el.classList.remove('is-visible');
+  el.style.transitionDelay = '';
+  el.style.willChange = 'auto';
+  activeRevealed.delete(el);
+}
+
+function showActiveTask(el, delay) {
+  if (!el.isConnected) return false;
+  el.classList.remove('is-instant');
+  el.style.willChange = 'transform, opacity';
+  void el.offsetWidth;
+  el.style.transitionDelay = `${delay}ms`;
+  el.classList.add('is-visible');
+  activeRevealed.add(el);
+  revealedActiveTaskIds.add(el.dataset.id);
+
+  if (el.__activeRevealTimer) clearTimeout(el.__activeRevealTimer);
+  el.__activeRevealTimer = setTimeout(() => {
+    if (!el.isConnected) return;
+    el.style.transitionDelay = '';
+    el.style.willChange = 'auto';
+    el.__activeRevealTimer = null;
+  }, 1000 + delay);
+  return true;
+}
+
+function updateActiveReveal() {
+  if (!activeCards.length) return;
+  // The dragged card temporarily lives on <body>; leave it alone.
+  if (document.body.classList.contains('is-dragging')) return;
+
+  const { viewTop, viewBottom } = getActiveViewport();
+  if (viewBottom <= viewTop) return;
+
+  // Re-arm cards that are now clearly out of view so a direction
+  // reversal animates them again instead of showing a solid row.
+  for (const el of activeRevealed) {
+    const card = el.__activeCard;
+    if (!el.isConnected || !card) {
+      activeRevealed.delete(el);
+      continue;
+    }
+    if (card.bottom < viewTop - ACTIVE_REVEAL_RESET ||
+        card.top > viewBottom + ACTIVE_REVEAL_RESET) {
+      resetActiveTask(el);
+    }
+  }
+
+  const isInitial = activeRevealInitial;
+  const inset = isInitial ? 0 : ACTIVE_REVEAL_INSET;
+  const range = getActiveRange(viewTop + inset, viewBottom - inset);
+  const toReveal = [];
+
+  for (let i = range.start; i <= range.end; i++) {
+    const el = activeCards[i].el;
+    if (!el.classList.contains('is-visible')) toReveal.push(el);
+  }
+
+  if (!toReveal.length) return;
+  activeRevealInitial = false;
+
+  requestAnimationFrame(() => {
+    let revealed = 0;
+    for (let i = 0; i < toReveal.length; i++) {
+      const el = toReveal[i];
+      if (!el.isConnected || el.classList.contains('is-visible')) continue;
+      const delay = isInitial
+        ? Math.min((revealed % 5) * ACTIVE_STAGGER, ACTIVE_STAGGER_MAX)
+        : 0;
+      if (showActiveTask(el, delay)) revealed++;
+    }
+  });
+}
+
+function scheduleActiveReveal() {
+  if (activeRevealRaf) return;
+  activeRevealRaf = requestAnimationFrame(() => {
+    activeRevealRaf = 0;
+    updateActiveReveal();
+  });
+}
+
+// After a rebuild, visible cards that were already seen must stay
+// instant. Off-screen cards remain hidden and re-arm for the next entry.
+function primeActiveRevealOnRebuild() {
+  const { viewTop, viewBottom } = getActiveViewport();
+  const range = getActiveRange(viewTop, viewBottom);
+  for (let i = range.start; i <= range.end; i++) {
+    const el = activeCards[i].el;
+    if (revealedActiveTaskIds.has(el.dataset.id)) {
+      revealActiveTaskNow(el, el.dataset.id);
+    }
+  }
+}
+
+DOM.main.addEventListener('scroll', scheduleActiveReveal, { passive: true });
+
+if (typeof ResizeObserver !== 'undefined') {
+  const activeResizeObserver = new ResizeObserver(() => {
+    if (activeGeometryRaf) return;
+    activeGeometryRaf = requestAnimationFrame(() => {
+      activeGeometryRaf = 0;
+      rebuildActiveGeometry();
+      scheduleActiveReveal();
+    });
+  });
+  activeResizeObserver.observe(DOM.main);
+}
+
 let tasks = JSON.parse(localStorage.getItem('taski_tasks') || '[]');
 
 // Instant Paint! Render cache immediately before any network requests
@@ -435,8 +641,7 @@ function createTaskElement(task, forCompletedPanel = false) {
   } else {
     // In main list: ticking triggers dismiss animation
     cb.addEventListener('change', e => handleTaskComplete(e, li, task.id));
-    // Clean up entry animation
-    li.classList.add('card--animate-in');
+    // Explicit entry animations (new task / untick) clean up after themselves
     li.addEventListener('animationend', () => li.classList.remove('card--animate-in'), { once: true });
     // Drag
     li.addEventListener('pointerdown', onPointerDown);
@@ -457,11 +662,14 @@ function updateZebraStripes(listElement = DOM.taskList) {
 
 function renderActiveTasks() {
   DOM.taskList.innerHTML = '';
+
   tasks.filter(t => !t.completed).forEach(t => {
-    const el = createTaskElement(t);
-    // Don't animate-in on generic re-renders to prevent flashing
-    DOM.taskList.appendChild(el);
+    DOM.taskList.appendChild(createTaskElement(t));
   });
+
+  rebuildActiveGeometry();
+  primeActiveRevealOnRebuild();
+  scheduleActiveReveal();
   updateZebraStripes(DOM.taskList);
 }
 
@@ -473,8 +681,9 @@ function renderActiveTasks() {
 //  keeps memory flat (off-screen rows are detached and released).
 // ══════════════════════════════════════════════════════════════════
 
-const COMPLETED_OVERSCAN = 320;   // px mounted above/below the viewport
-const COMPLETED_REVEAL_EDGE = 45; // px lookahead that kicks the reveal
+const COMPLETED_OVERSCAN = 320;    // px mounted above/below the viewport
+const COMPLETED_REVEAL_INSET = 8;  // px inside the viewport where the reveal starts
+const COMPLETED_REVEAL_RESET = 0;  // re-arm as soon as a row is fully out
 const COMPLETED_STAGGER = 35;
 const COMPLETED_STAGGER_MAX = 140;
 
@@ -965,18 +1174,35 @@ class CompletedVirtualizer {
     );
   }
 
-  revealItems(scrollTop, viewportHeight, animate, stagger) {
+  revealItems(scrollTop, viewportHeight, animate, isInitial) {
     const viewTop = scrollTop;
     const viewBottom = scrollTop + viewportHeight;
+    // On open, any partially visible row may animate. While scrolling,
+    // wait until a few pixels are actually inside the viewport so the
+    // swoop is visible on screen instead of firing below the fold.
+    const revealTop = isInitial ? viewTop : viewTop + COMPLETED_REVEAL_INSET;
+    const revealBottom = isInitial ? viewBottom : viewBottom - COMPLETED_REVEAL_INSET;
     const toReveal = [];
 
     for (const [idx, el] of this.mounted) {
-      if (el.classList.contains('is-visible')) continue;
-
       const itemTop = this.offsets[idx];
       const itemBottom = itemTop + this.heights[idx];
 
-      if (itemBottom >= viewTop - 10 && itemTop <= viewBottom + COMPLETED_REVEAL_EDGE) {
+      if (el.classList.contains('is-visible')) {
+        // Re-arm rows once they are clearly outside the viewport, so
+        // reversing scroll direction animates them again instead of
+        // showing a few pre-revealed solid cards next to the viewport.
+        if (itemBottom < viewTop - COMPLETED_REVEAL_RESET ||
+            itemTop > viewBottom + COMPLETED_REVEAL_RESET) {
+          el.classList.add('is-instant');
+          el.classList.remove('is-visible');
+          el.style.transitionDelay = '';
+          el.style.willChange = 'auto';
+        }
+        continue;
+      }
+
+      if (itemBottom >= revealTop && itemTop <= revealBottom) {
         toReveal.push([idx, el]);
       }
     }
@@ -999,8 +1225,9 @@ class CompletedVirtualizer {
         const el = toReveal[i][1];
         if (!el.isConnected || el.classList.contains('is-visible')) continue;
 
+        el.classList.remove('is-instant');
         void el.offsetWidth;
-        const delay = stagger
+        const delay = isInitial
           ? Math.min((revealed % 5) * COMPLETED_STAGGER, COMPLETED_STAGGER_MAX)
           : 0;
         el.style.transitionDelay = `${delay}ms`;
@@ -1117,8 +1344,11 @@ DOM.modalConfirm.addEventListener('click', () => {
   tasks.push(newTask);
   saveTasks(); // instant cache
   const el = createTaskElement(newTask);
+  revealActiveTaskNow(el, newTask.id);
   el.classList.add('card--animate-in');
   DOM.taskList.appendChild(el);
+  rebuildActiveGeometry();
+  scheduleActiveReveal();
   updateZebraStripes(DOM.taskList);
   closeModal();
 
@@ -1299,6 +1529,8 @@ function handleTaskComplete(e, li, id) {
       if (e.propertyName !== 'height') return;
       li.removeEventListener('transitionend', handler);
       li.remove();
+      rebuildActiveGeometry();
+      scheduleActiveReveal();
       renderCompletedTasks();
     });
   }, 80);
@@ -1356,10 +1588,14 @@ function handleUntick(li, id) {
     // Rebuild the virtual list (also removes an empty date header)
     renderCompletedTasks();
 
-    // Add back to main list
+    // Add back to main list. This is not a first-entrance reveal, so
+    // keep it instant and let the existing return animation play.
     const newEl = createTaskElement(task);
+    revealActiveTaskNow(newEl, task.id);
     newEl.classList.add('card--animate-in');
     DOM.taskList.appendChild(newEl);
+    rebuildActiveGeometry();
+    scheduleActiveReveal();
     updateZebraStripes(DOM.taskList);
   }
 
@@ -1726,6 +1962,8 @@ function onPointerUp(e) {
       tasks = tasks.filter(t => t.id !== item.dataset.id);
       saveTasks(); // instant cache
       if (db) db.from('tasks').delete().eq('id', item.dataset.id).then();
+      rebuildActiveGeometry();
+      scheduleActiveReveal();
       updateZebraStripes(DOM.taskList);
     });
     
@@ -1748,6 +1986,8 @@ function onPointerUp(e) {
     item.style.cssText = '';
     DOM.taskList.insertBefore(item, ph);
     ph.remove();
+    rebuildActiveGeometry();
+    scheduleActiveReveal();
 
     // Sync data
     const nodes = Array.from(DOM.taskList.querySelectorAll('.topic-item'));
@@ -2040,6 +2280,8 @@ window.addEventListener('touchmove', (e) => {
 // Re-measure once the real font is ready so scroll geometry stays exact.
 if (document.fonts && document.fonts.ready) {
   document.fonts.ready.then(() => {
+    rebuildActiveGeometry();
+    scheduleActiveReveal();
     if (completedVirtualizer) completedVirtualizer.invalidateLayout();
   }).catch(() => {});
 }

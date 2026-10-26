@@ -630,9 +630,10 @@ main::-webkit-scrollbar-thumb {
 /*
  * Study-tracker signature reveal animation.
  * Cards and date headers swoop in from the lower-right when they
- * actually enter the viewport. Only mounted rows carry these styles,
- * so thousands of completed tasks never animate off-screen.
+ * actually enter the viewport. Completed rows stay mounted only near
+ * the viewport, so thousands of them never animate off-screen.
  */
+#taskList .topic-item,
 .completed-task-list .topic-item,
 .completed-date-header {
   opacity: 0;
@@ -642,16 +643,20 @@ main::-webkit-scrollbar-thumb {
   will-change: transform, opacity;
 }
 
+#taskList .topic-item.is-visible,
 .completed-task-list .topic-item.is-visible,
 .completed-date-header.is-visible {
   opacity: 1;
   transform: none;
 }
 
-/* Used when a data refresh remounts already-seen rows: no replay. */
+/* Used when a rebuild mounts already-seen rows: no replay. */
+#taskList .topic-item.is-instant,
 .completed-task-list .topic-item.is-instant,
 .completed-date-header.is-instant {
-  transition: none !important;
+  /* No entrance replay. Inline transitions (untick/delete/drag) still
+     win here, so those interactions keep their own animations. */
+  transition: none;
   will-change: auto;
 }
 
@@ -660,6 +665,7 @@ main::-webkit-scrollbar-thumb {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  #taskList .topic-item,
   .completed-task-list .topic-item,
   .completed-date-header {
     opacity: 1;
