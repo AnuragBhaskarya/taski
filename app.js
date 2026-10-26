@@ -6,6 +6,7 @@ const DOM = {
   themeToggle: document.getElementById('themeToggle'),
   themeIconMoon: document.getElementById('themeIconMoon'),
   themeIconSun: document.getElementById('themeIconSun'),
+  headerDate: document.getElementById('headerDate'),
   taskList: document.getElementById('taskList'),
   main: document.querySelector('main'),
   fabContainer: document.getElementById('fabContainer'),
@@ -63,6 +64,33 @@ function isTaskLocked(task) {
 }
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function updateHeaderDate() {
+  if (!DOM.headerDate) return;
+
+  const now = new Date();
+  DOM.headerDate.textContent = `${DAY_NAMES[now.getDay()]} · ${now.getDate()} ${MONTH_NAMES[now.getMonth()]}`;
+  DOM.headerDate.dateTime = formatCalendarDayKey(now);
+  DOM.headerDate.title = now.toLocaleDateString(undefined, {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric'
+  });
+}
+
+function scheduleHeaderDateRefresh() {
+  const now = new Date();
+  const nextMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 2);
+  setTimeout(() => {
+    updateHeaderDate();
+    scheduleHeaderDateRefresh();
+  }, nextMidnight - now);
+}
+
+updateHeaderDate();
+scheduleHeaderDateRefresh();
 
 function getTaskDateKey(timestamp) {
   if (!timestamp) return 'earlier';

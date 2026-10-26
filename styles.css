@@ -114,10 +114,27 @@ main::-webkit-scrollbar-thumb {
   transition: background-color 0.4s ease, border-color 0.4s ease;
 }
 
+.header-brand {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
 .header-title {
   font-size: 22px;
   font-weight: bold;
+  line-height: 1.08;
   color: var(--txt);
+}
+
+.header-date {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.5;
+  letter-spacing: .11em;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .header-actions {

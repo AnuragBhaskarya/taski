@@ -52,12 +52,15 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Comic+Relief:wght@400;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=2.8">
+  <link rel="stylesheet" href="styles.css?v=2.9">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
   <header class="app-header">
-    <div class="header-title">Taski</div>
+    <div class="header-brand">
+      <div class="header-title">Taski</div>
+      <time class="header-date" id="headerDate"></time>
+    </div>
     <div class="header-actions">
       <button id="completedBtn" class="header-icon-btn" aria-label="View completed tasks">
         <!-- Checkmark circle SVG -->
@@ -217,7 +220,7 @@
 
   <div id="taskiCalendarToast" class="taski-calendar-toast" role="status" aria-live="polite"></div>
 
-  <script src="app.js?v=2.8"></script>
+  <script src="app.js?v=2.9"></script>
 
   <!-- SERVICE WORKER REGISTRATION (PWA Offline & Mobile Support) -->
   <script>
