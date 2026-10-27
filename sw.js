@@ -5,7 +5,8 @@
 //   revalidate), so a deploy is picked up on the next launch.
 // • Static assets are cache-first with a background refresh.
 // • /api/* is never cached: the sync engine owns offline durability.
-const CACHE_NAME = 'taski-pwa-v24';
+const CACHE_NAME = 'taski-pwa-v25';
+const REQUIRED_ASSETS = new Set(['/', '/index.html', '/styles.css?v=4', '/app.js?v=5', '/sync.js?v=2']);
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
@@ -31,26 +32,36 @@ const PRECACHE_ASSETS = [
   '/vendor/supabase-js-2.118.0.js'
 ];
 
-// 1. Install: resilient caching. One missing optional asset must never
-//    prevent the worker (and therefore offline support) from installing.
+// 1. Install: resilient caching. Optional assets may fail without blocking
+//    the worker, but the core shell must be complete or installation fails
+//    (so the previously working worker stays in charge and we retry later).
 self.addEventListener('install', (event) => {
-  self.skipWaiting();
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return Promise.allSettled(
-        PRECACHE_ASSETS.map((assetUrl) =>
-          fetch(assetUrl, { cache: 'reload' })
-            .then((response) => {
-              if (!response || !response.ok) throw new Error(`HTTP ${response && response.status}`);
-              return cache.put(assetUrl, response);
-            })
-            .catch((err) => {
-              console.warn('[Taski PWA] Precache skipped:', assetUrl, err && err.message);
-            })
-        )
-      );
-    })
-  );
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE_NAME);
+    const results = await Promise.allSettled(
+      PRECACHE_ASSETS.map(async (assetUrl) => {
+        const response = await fetch(assetUrl, { cache: 'reload' });
+        if (!response || !response.ok) throw new Error(`HTTP ${response && response.status}`);
+        await cache.put(assetUrl, response);
+        return assetUrl;
+      })
+    );
+
+    const failedRequired = [];
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        const assetUrl = PRECACHE_ASSETS[index];
+        console.warn('[Taski PWA] Precache skipped:', assetUrl, result.reason && result.reason.message);
+        if (REQUIRED_ASSETS.has(assetUrl)) failedRequired.push(assetUrl);
+      }
+    });
+
+    if (failedRequired.length) {
+      await caches.delete(CACHE_NAME);
+      throw new Error(`Core precache failed: ${failedRequired.join(', ')}`);
+    }
+    await self.skipWaiting();
+  })());
 });
 
 // 2. Activate: drop old versions, take control immediately.
