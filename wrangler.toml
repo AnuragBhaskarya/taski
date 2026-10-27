@@ -1,0 +1,17 @@
+#:schema node_modules/wrangler/config-schema.json
+name = "taski"
+pages_build_output_dir = "."
+compatibility_date = "2026-09-19"
+
+[[d1_databases]]
+binding = "TASKI_DB"
+database_name = "taski-sync"
+database_id = "01c5334e-3a44-479d-aa20-eaaaf439f92c"
+
+[[kv_namespaces]]
+binding = "TASKI_KV"
+id = "ef0358011d554c1cb1a7f5b595fdf5dd"
+
+[vars]
+SUPABASE_URL = "https://hftuxgjszjxtakigiepr.supabase.co"
+SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhmdHV4Z2pzemp4dGFraWdpZXByIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk4MzkzMzksImV4cCI6MjEwNTQxNTMzOX0.DPLfWrlTZcz0k407hS_BiM5zhUJutIzciKcCrlTbXfQ"

@@ -1,3 +1,22 @@
+/* Self-hosted fonts: zero network dependency after first install. */
+@font-face {
+  font-family: 'Comic Relief';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/assets/fonts/comic-relief-400.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Comic Relief';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/assets/fonts/comic-relief-700.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 :root{
   --bg:#fff;
   --fg:#8a8a8a;
@@ -149,6 +168,45 @@ main::-webkit-scrollbar-thumb {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+/* Tiny, unobtrusive sync state. Hidden entirely when everything is in sync. */
+.sync-status {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0;
+  transform: scale(.6);
+  margin-right: 1px;
+  transition: opacity .2s ease, transform .2s ease, background .2s ease;
+  pointer-events: none;
+}
+
+.sync-status[data-state="offline"] {
+  opacity: 1;
+  transform: scale(1);
+  background: #e8a33d;
+}
+
+.sync-status[data-state="pending"],
+.sync-status[data-state="syncing"] {
+  opacity: 1;
+  transform: scale(1);
+  background: var(--accent);
+  animation: sync-status-pulse 1.4s ease-in-out infinite;
+}
+
+.sync-status[data-state="error"] {
+  opacity: 1;
+  transform: scale(1);
+  background: var(--red);
+}
+
+@keyframes sync-status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .28; }
 }
 
 .header-icon-btn {

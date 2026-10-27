@@ -7,6 +7,7 @@ const DOM = {
   themeIconMoon: document.getElementById('themeIconMoon'),
   themeIconSun: document.getElementById('themeIconSun'),
   headerDate: document.getElementById('headerDate'),
+  syncStatus: document.getElementById('syncStatus'),
   taskList: document.getElementById('taskList'),
   main: document.querySelector('main'),
   fabContainer: document.getElementById('fabContainer'),
@@ -378,11 +379,6 @@ if (typeof ResizeObserver !== 'undefined') {
 
 let tasks = JSON.parse(localStorage.getItem('taski_tasks') || '[]');
 
-// Instant Paint! Render cache immediately before any network requests
-if (tasks.length > 0) {
-  renderActiveTasks();
-}
-
 let renderBatchTimer = null;
 let pendingRemoteRender = false;
 let completedDrag = null;
@@ -406,7 +402,7 @@ function scheduleRender() {
     tasks.sort((a, b) => {
       if (a.completed !== b.completed) return a.completed ? 1 : -1;
       if (a.completed) return (b.completedAt || 0) - (a.completedAt || 0);
-      return a.position - b.position;
+      return (a.position - b.position) || String(a.id).localeCompare(String(b.id));
     });
     
     saveTasks();
@@ -415,92 +411,160 @@ function scheduleRender() {
   });
 }
 
-async function initApp() {
-  try {
-    const res = await fetch('/api/env');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const env = await res.json();
-    if (!env || !env.url || !env.key) throw new Error('Missing environment credentials');
-    supabaseUrl = env.url;
-    supabaseKey = env.key;
-    if (window.supabase) {
-      db = window.supabase.createClient(supabaseUrl, supabaseKey);
-      
-      db
-        .channel('tasks')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, payload => {
-          if (payload.eventType === 'INSERT') {
-            if (!tasks.find(t => t.id === payload.new.id)) {
-              tasks.push({ ...payload.new, _lastMutatedAt: 0 });
-              scheduleRender();
-            }
-          } else if (payload.eventType === 'UPDATE') {
-            const localTask = tasks.find(t => t.id === payload.new.id);
-            if (localTask) {
-              if (Date.now() - (localTask._lastMutatedAt || 0) < 2000) return;
-              Object.assign(localTask, {
-                title: payload.new.text,
-                completed: payload.new.completed,
-                completedAt: payload.new.completedAt,
-                position: payload.new.position
-              });
-              scheduleRender();
-            }
-          } else if (payload.eventType === 'DELETE') {
-            const localTask = tasks.find(t => t.id === payload.old.id);
-            if (localTask) {
-              if (Date.now() - (localTask._lastMutatedAt || 0) < 2000) return;
-              tasks = tasks.filter(t => t.id !== payload.old.id);
-              scheduleRender();
-            }
-          }
-        })
-        .subscribe();
-
-      await loadTasks();
-    }
-  } catch (e) {
-    console.warn('[Taski] Remote database sync offline or not configured. Running in local-first mode.', e);
-  }
+// Instant Paint! Render the local cache before any network work.
+if (tasks.length > 0) {
+  renderActiveTasks();
 }
 
-initApp();
+// ══════════════════════════════════════════════════════════════════
+//  Offline-first sync
+//
+//  The UI keeps mutating the same `tasks` array it always has. TaskiSync
+//  writes each action to a durable outbox with an HLC version, applies
+//  remote actions field-by-field, and reconciles with the server.
+// ══════════════════════════════════════════════════════════════════
 
-async function loadTasks() {
-  if (!db) return;
+let taskiSync = null;
+
+if (window.TaskiSync) {
+  taskiSync = window.TaskiSync.create({
+    getTasks: () => tasks,
+    setTasks: (next) => { tasks = next; },
+    onPersist: () => saveTasks(),
+    onRemoteChange: () => {
+      saveTasks();
+      scheduleRender();
+    },
+    onStatus: (status) => updateSyncStatus(status),
+  });
+  taskiSync.initLocalState();
+  window.taskiSync = taskiSync;
+} else {
+  console.error('[Taski] Sync engine failed to load. Running local-only.');
+}
+
+// Another tab changed the shared cache. Re-render without writing it back,
+// otherwise two tabs would bounce identical storage events forever.
+window.addEventListener('storage', (event) => {
+  if (event.key !== 'taski_tasks' || !event.newValue) return;
   try {
-    const { data, error } = await db.from('tasks').select('*').order('position', { ascending: true });
-    if (!error && data) {
-      const newTasks = data.map(d => ({
-        id: d.id,
-        title: d.text,
-        completed: d.completed,
-        completedAt: d.completedAt,
-        position: d.position
-      }));
-      
-      // Sort both identically for stable comparison
-      const sortFn = (a, b) => a.id.localeCompare(b.id);
-      const stableLocal = [...tasks].sort(sortFn);
-      const stableRemote = [...newTasks].sort(sortFn);
-      
-      // Simple diff to prevent DOM flash if data is identical
-      if (JSON.stringify(stableLocal) === JSON.stringify(stableRemote)) {
-        return;
-      }
-      
-      tasks = newTasks;
-      saveTasks(); // Update cache with fresh data
-      renderActiveTasks();
+    const next = JSON.parse(event.newValue);
+    if (!Array.isArray(next)) return;
+    tasks = next;
+    renderActiveTasks();
+    if (DOM.completedPanel && !DOM.completedPanel.classList.contains('hidden')) {
       renderCompletedTasks();
     }
-  } catch (e) {
-    console.error('Failed to load tasks', e);
+  } catch {
+    // Ignore a partial write from a closing tab.
   }
+});
+
+function updateSyncStatus(status) {
+  const el = DOM.syncStatus;
+  if (!el) return;
+
+  let state = 'synced';
+  let label = 'All changes synced';
+
+  if (!status.online) {
+    state = 'offline';
+    label = status.pending
+      ? `Offline — ${status.pending} change${status.pending === 1 ? '' : 's'} saved on this device`
+      : 'Offline — changes will sync when connected';
+  } else if (status.lastError) {
+    state = 'error';
+    label = 'Sync error — retrying in the background';
+  } else if (status.pending > 0) {
+    state = status.syncing ? 'syncing' : 'pending';
+    label = `Syncing ${status.pending} local change${status.pending === 1 ? '' : 's'}…`;
+  }
+
+  el.dataset.state = state;
+  el.title = label;
+  el.setAttribute('aria-label', label);
 }
 
+// ── Realtime notification bus (optional; polling is the safety net) ──
+const SUPABASE_ENV_CACHE = 'taski_supabase_env';
+let realtimeInitPromise = null;
+
+function readCachedSupabaseEnv() {
+  try {
+    const env = JSON.parse(localStorage.getItem(SUPABASE_ENV_CACHE) || 'null');
+    if (env && env.url && env.key) return env;
+  } catch { /* ignore */ }
+  return null;
+}
+
+function loadSupabaseScript() {
+  if (window.supabase) return Promise.resolve(true);
+  if (window.__taskiSupabaseLoading) return window.__taskiSupabaseLoading;
+  window.__taskiSupabaseLoading = new Promise((resolve) => {
+    const script = document.createElement('script');
+    script.src = '/vendor/supabase-js-2.118.0.js';
+    script.async = true;
+    script.onload = () => resolve(!!window.supabase);
+    script.onerror = () => resolve(false);
+    document.head.appendChild(script);
+  });
+  return window.__taskiSupabaseLoading;
+}
+
+async function initRealtime() {
+  if (!taskiSync || realtimeInitPromise) return realtimeInitPromise;
+  realtimeInitPromise = (async () => {
+    try {
+      let env = readCachedSupabaseEnv();
+      try {
+        const res = await fetch('/api/env', { cache: 'no-store' });
+        if (res.ok) {
+          const fresh = await res.json();
+          if (fresh && fresh.url && fresh.key) {
+            env = fresh;
+            localStorage.setItem(SUPABASE_ENV_CACHE, JSON.stringify(fresh));
+          }
+        }
+      } catch { /* offline: use cached env if we have one */ }
+
+      if (!env || !env.url || !env.key) return;
+      const loaded = await loadSupabaseScript();
+      if (!loaded || !window.supabase) return;
+
+      supabaseUrl = env.url;
+      supabaseKey = env.key;
+      db = window.supabase.createClient(supabaseUrl, supabaseKey);
+
+      db
+        .channel('taski-sync', { config: { broadcast: { self: false } } })
+        .on('broadcast', { event: 'sync' }, () => {
+          if (taskiSync) taskiSync.requestSync('realtime');
+        })
+        .subscribe();
+    } catch (err) {
+      console.warn('[Taski] Realtime unavailable. Polling sync remains active.', err);
+    }
+  })().finally(() => {
+    if (!db) realtimeInitPromise = null;
+  });
+  return realtimeInitPromise;
+}
+
+window.addEventListener('online', () => {
+  if (!db) initRealtime();
+});
+
+if (taskiSync) {
+  taskiSync.start();
+}
+initRealtime();
+
 function saveTasks() {
-  localStorage.setItem('taski_tasks', JSON.stringify(tasks));
+  try {
+    localStorage.setItem('taski_tasks', JSON.stringify(tasks));
+  } catch (err) {
+    console.warn('[Taski] Could not persist the local task cache.', err);
+  }
 }
 
 
@@ -1772,16 +1836,18 @@ DOM.modalConfirm.addEventListener('click', () => {
   const pos = activeTasks.length > 0 ? activeTasks[activeTasks.length - 1].position + 1000 : 1000;
 
   const newTask = {
-    id: Date.now().toString() + Math.random().toString(36).substr(2, 5),
+    id: (window.crypto && typeof window.crypto.randomUUID === 'function')
+      ? window.crypto.randomUUID()
+      : Date.now().toString() + Math.random().toString(36).slice(2, 7),
     title,
     completed: false,
     completedAt: null,
-    position: pos,
-    _lastMutatedAt: Date.now()
+    position: pos
   };
 
   tasks.push(newTask);
-  saveTasks(); // instant cache
+  if (taskiSync) taskiSync.markCreate(newTask);
+  else saveTasks(); // instant cache (local-only fallback)
   const el = createTaskElement(newTask);
   revealActiveTaskNow(el, newTask.id);
   el.classList.add('card--animate-in');
@@ -1790,29 +1856,8 @@ DOM.modalConfirm.addEventListener('click', () => {
   scheduleActiveReveal();
   updateZebraStripes(DOM.taskList);
   closeModal();
-
-  DOM.modalConfirm.disabled = true;
-  
-  if (db) {
-    db.from('tasks').insert([{
-      id: newTask.id,
-      text: newTask.title,
-      completed: newTask.completed,
-      completedAt: newTask.completedAt,
-      position: newTask.position
-    }]).then(({error}) => { 
-      DOM.modalConfirm.disabled = false;
-      if (error && error.code !== '23505') console.error(error); 
-    }).catch(err => {
-      DOM.modalConfirm.disabled = false;
-      console.warn('Supabase insert failed', err);
-    });
-  } else {
-    DOM.modalConfirm.disabled = false;
-  }
-
+  DOM.modalConfirm.disabled = false;
   DOM.modalInput.value = '';
-  closeModal();
 });
 
 DOM.modalInput.addEventListener('keydown', e => {
@@ -2900,16 +2945,18 @@ function handleTaskComplete(e, li, id) {
 
   const task = tasks.find(t => t.id === id);
   if (task) {
-    task.completed = true;
-    task.completedAt = Date.now();
-    task._lastMutatedAt = Date.now();
-    saveTasks(); // instant cache
-    if (db) db.from('tasks').update({ completed: true, completedAt: task.completedAt }).eq('id', task.id).then();
+    if (taskiSync) {
+      taskiSync.markComplete(task);
+    } else {
+      task.completed = true;
+      task.completedAt = Date.now();
+      saveTasks(); // instant cache (local-only fallback)
+    }
   }
 
   li.classList.add('topic-item--complete', 'topic-item--celebrate');
   const td = li.querySelector('.task-time');
-  if (td) td.innerHTML = formatCompletedTime(task.completedAt);
+  if (td) td.innerHTML = formatCompletedTime(task && task.completedAt);
 
   // Confetti + flash + ripple
   spawnConfetti(li, cb);
@@ -2966,13 +3013,16 @@ function handleUntick(li, id) {
   // Immediately disable to prevent double-tap
   li.style.pointerEvents = 'none';
   
-  task.completed = false;
-  task.completedAt = null;
   const activeTasks = tasks.filter(t => !t.completed);
-  task.position = activeTasks.length > 0 ? activeTasks[activeTasks.length - 1].position + 1000 : 1000;
-  task._lastMutatedAt = Date.now();
-  saveTasks();
-  if (db) db.from('tasks').update({ completed: false, completedAt: null, position: task.position }).eq('id', task.id).then();
+  const nextPosition = activeTasks.length > 0 ? activeTasks[activeTasks.length - 1].position + 1000 : 1000;
+  if (taskiSync) {
+    taskiSync.markUncomplete(task, nextPosition);
+  } else {
+    task.completed = false;
+    task.completedAt = null;
+    task.position = nextPosition;
+    saveTasks();
+  }
 
   // Lift the row out of the completed list, then ripple the rows below
   // upward while the removed row drifts away.
@@ -3336,11 +3386,12 @@ function onPointerUp(e) {
     animateDetachedCard(item);
     ph.remove();
 
-    const task = tasks.find(t => t.id === item.dataset.id);
-    if (task) task._lastMutatedAt = Date.now();
-    tasks = tasks.filter(t => t.id !== item.dataset.id);
-    saveTasks(); // instant cache
-    if (db) db.from('tasks').delete().eq('id', item.dataset.id).then();
+    if (taskiSync) {
+      taskiSync.markDelete(item.dataset.id);
+    } else {
+      tasks = tasks.filter(t => t.id !== item.dataset.id);
+      saveTasks();
+    }
 
     DOM.main.scrollTop = scrollTop;
     rebuildActiveGeometry();
@@ -3393,8 +3444,12 @@ function onPointerUp(e) {
       const nextTask = tasks.find(t => t.id === nextId);
       newPos = (prevTask.position + nextTask.position) / 2;
     }
-    droppedTask.position = newPos;
-    droppedTask._lastMutatedAt = Date.now();
+    if (taskiSync) {
+      taskiSync.markPosition(droppedTask, newPos);
+    } else {
+      droppedTask.position = newPos;
+      saveTasks();
+    }
 
     tasks.sort((a, b) => {
       if (a.completed !== b.completed) return a.completed ? 1 : -1;
@@ -3403,7 +3458,6 @@ function onPointerUp(e) {
     });
 
     saveTasks(); // instant cache
-    if (db) db.from('tasks').update({ position: newPos }).eq('id', droppedTask.id).then();
     updateZebraStripes(DOM.taskList);
     drag = null;
     
@@ -3591,11 +3645,12 @@ function onCompletedPointerUp(e) {
     ph.remove();
     completedDrag = null;
 
-    const task = tasks.find(t => t.id === taskId);
-    if (task) task._lastMutatedAt = Date.now();
-    tasks = tasks.filter(t => t.id !== taskId);
-    saveTasks();
-    if (db) db.from('tasks').delete().eq('id', taskId).then();
+    if (taskiSync) {
+      taskiSync.markDelete(taskId);
+    } else {
+      tasks = tasks.filter(t => t.id !== taskId);
+      saveTasks();
+    }
 
     renderCompletedTasks({ riseFromId: taskId });
     return;

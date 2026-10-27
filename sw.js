@@ -1,74 +1,84 @@
-// Taski Progressive Web App (PWA) Service Worker — Bulletproof Edition
-const CACHE_NAME = 'taski-pwa-v23';
+// Taski Progressive Web App (PWA) Service Worker — offline-first
+//
+// • The shell is precached so a cold launch is instant and fully offline.
+// • Navigations are cache-first with a background refresh (stale-while-
+//   revalidate), so a deploy is picked up on the next launch.
+// • Static assets are cache-first with a background refresh.
+// • /api/* is never cached: the sync engine owns offline durability.
+const CACHE_NAME = 'taski-pwa-v24';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
-  '/styles.css',
-  '/styles.css?v=3.1',
-  '/app.js',
-  '/app.js?v=3.1',
+  '/styles.css?v=4',
+  '/app.js?v=5',
+  '/sync.js?v=2',
   '/manifest.webmanifest',
   '/manifest.json',
   '/favicon.ico',
   '/assets/favicon-32x32.png',
   '/assets/favicon-16x16.png',
   '/assets/favicon.ico',
+  '/assets/icon-120.png',
+  '/assets/icon-152.png',
   '/assets/icon-180.png',
   '/assets/icon-192.png',
   '/assets/icon-512.png',
   '/assets/icon-192-maskable.png',
   '/assets/icon-512-maskable.png',
-  '/assets/banner-social.png'
+  '/assets/banner-social.png',
+  '/assets/fonts/comic-relief-400.woff2',
+  '/assets/fonts/comic-relief-700.woff2',
+  '/vendor/supabase-js-2.118.0.js'
 ];
 
-// 1. Install: Resilient caching with Promise.allSettled so no single asset can fail installation
+// 1. Install: resilient caching. One missing optional asset must never
+//    prevent the worker (and therefore offline support) from installing.
 self.addEventListener('install', (event) => {
   self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return Promise.allSettled(
         PRECACHE_ASSETS.map((assetUrl) =>
-          cache.add(assetUrl).catch((err) => {
-            console.warn('[PWA SW] Precache skipped for:', assetUrl, err);
-          })
+          fetch(assetUrl, { cache: 'reload' })
+            .then((response) => {
+              if (!response || !response.ok) throw new Error(`HTTP ${response && response.status}`);
+              return cache.put(assetUrl, response);
+            })
+            .catch((err) => {
+              console.warn('[Taski PWA] Precache skipped:', assetUrl, err && err.message);
+            })
         )
       );
     })
   );
 });
 
-// 2. Activate: Clear old caches and claim existing clients immediately
+// 2. Activate: drop old versions, take control immediately.
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(
+    caches.keys()
+      .then((keys) => Promise.all(
         keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
-      )
-    ).then(() => self.clients.claim())
+      ))
+      .then(() => self.clients.claim())
   );
 });
 
-// Listen for skip waiting messages from the page
 self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'SKIP_WAITING') {
-    self.skipWaiting();
-  }
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
-// 3. Fetch: Bulletproof request routing
+// 3. Fetch: platform files stay network-only; the app shell is offline-first.
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
 
   const url = new URL(req.url);
 
-  // IMPORTANT FOR MOBILE/SAFARI: NEVER intercept cross-origin requests (CDN scripts like Supabase, Google Fonts)
-  // Let the browser handle cross-origin requests natively to avoid Safari CORS/opaque response failures
-  if (url.origin !== self.location.origin) {
-    return;
-  }
+  // Never intercept cross-origin requests.
+  if (url.origin !== self.location.origin) return;
 
-  // Never intercept dynamic backend REST APIs, Cloudflare functions, or webhooks
+  // Never intercept dynamic backend APIs or health probes.
   if (
     url.pathname.startsWith('/api/') ||
     url.pathname.startsWith('/ping') ||
@@ -77,53 +87,73 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Navigation requests: Detect navigation across all mobile browsers (iOS Safari PWA & standard tabs)
   const isNavigation =
     req.mode === 'navigate' ||
     req.destination === 'document' ||
     (req.headers.get('accept') && req.headers.get('accept').includes('text/html'));
 
   if (isNavigation) {
-    event.respondWith(
-      fetch(req)
-        .then((resp) => {
-          if (resp && (resp.status === 200 || resp.type === 'basic')) {
-            const copy = resp.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(req, copy)).catch(() => {});
-          }
-          return resp;
-        })
-        .catch(async () => {
-          // If network is offline or fails, return cached index.html or fallback to root
-          const cache = await caches.open(CACHE_NAME);
-          const cached = (await cache.match('/index.html')) || (await cache.match('/'));
-          if (cached) return cached;
-          return fetch('/');
-        })
-    );
+    event.respondWith(navigationResponse(event, req));
     return;
   }
 
-  // Static Assets (CSS, JS, images, icons): Cache-first with network fallback
-  event.respondWith(
-    caches.match(req).then((cached) => {
-      if (cached) return cached;
-
-      return fetch(req)
-        .then((networkRes) => {
-          if (networkRes && networkRes.status === 200) {
-            const copy = networkRes.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(req, copy)).catch(() => {});
-          }
-          return networkRes;
-        })
-        .catch(async () => {
-          // If offline and not in cache, try matching without query params
-          const cleanUrl = url.pathname;
-          const cleanCached = await caches.match(cleanUrl);
-          if (cleanCached) return cleanCached;
-          return new Response('', { status: 408, statusText: 'Request Timeout' });
-        });
-    })
-  );
+  event.respondWith(staticResponse(event, req));
 });
+
+async function navigationResponse(event, req) {
+  const cache = await caches.open(CACHE_NAME);
+  const cached = (await cache.match('/index.html')) || (await cache.match('/'));
+
+  const refresh = fetch(req)
+    .then((response) => {
+      if (response && response.ok) {
+        const copy = response.clone();
+        cache.put('/index.html', copy).catch(() => {});
+      }
+      return response;
+    })
+    .catch(() => null);
+
+  if (cached) {
+    // Refresh in the background so the next launch gets the new build.
+    event.waitUntil(refresh);
+    return cached;
+  }
+
+  const fresh = await refresh;
+  if (fresh) return fresh;
+
+  return new Response(
+    '<!doctype html><meta charset="utf-8"><title>Taski is offline</title><body style="font-family:sans-serif;padding:2rem"><h1>Taski is offline</h1><p>Reconnect once to install the app shell.</p></body>',
+    { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } }
+  );
+}
+
+async function staticResponse(event, req) {
+  const cache = await caches.open(CACHE_NAME);
+  const cached = await cache.match(req);
+
+  const refresh = fetch(req)
+    .then((response) => {
+      if (response && response.status === 200) {
+        const copy = response.clone();
+        cache.put(req, copy).catch(() => {});
+      }
+      return response;
+    })
+    .catch(() => null);
+
+  if (cached) {
+    event.waitUntil(refresh);
+    return cached;
+  }
+
+  const fresh = await refresh;
+  if (fresh) return fresh;
+
+  // Query-string cache busting may not be cached yet; retry the clean URL.
+  const clean = await cache.match(req.url.split('?')[0]);
+  if (clean) return clean;
+
+  return new Response('', { status: 408, statusText: 'Request Timeout' });
+}

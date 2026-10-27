@@ -48,12 +48,10 @@
   <link rel="apple-touch-icon" sizes="152x152" href="/assets/icon-152.png">
   <link rel="apple-touch-icon" sizes="120x120" href="/assets/icon-120.png">
 
-  <!-- Typography -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Comic+Relief:wght@400;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=3.1">
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <!-- Typography (self-hosted: no network dependency, instant offline paint) -->
+  <link rel="preload" href="/assets/fonts/comic-relief-400.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/assets/fonts/comic-relief-700.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="styles.css?v=4">
 </head>
 <body>
   <header class="app-header">
@@ -62,6 +60,7 @@
       <time class="header-date" id="headerDate"></time>
     </div>
     <div class="header-actions">
+      <span id="syncStatus" class="sync-status" role="status" aria-live="polite" data-state="synced" title="All changes synced" aria-label="All changes synced"></span>
       <button id="themeToggle" class="header-icon-btn" aria-label="Toggle theme">
         <!-- Sun/Moon SVG — starts as moon (light mode) -->
         <svg id="themeIconMoon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -220,7 +219,8 @@
 
   <div id="taskiCalendarToast" class="taski-calendar-toast" role="status" aria-live="polite"></div>
 
-  <script src="app.js?v=3.1"></script>
+  <script src="sync.js?v=2" defer></script>
+  <script src="app.js?v=5" defer></script>
 
   <!-- SERVICE WORKER REGISTRATION (PWA Offline & Mobile Support) -->
   <script>
