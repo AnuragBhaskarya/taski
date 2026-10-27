@@ -160,7 +160,8 @@ async function seedFromSupabase(db, env) {
   const key = env.SUPABASE_ANON_KEY || env.SUPABASE_KEY || '';
 
   if (!url || !key) {
-    await setMeta(db, 'seeded', Date.now());
+    // Do not mark the database as seeded: the env may be attached later.
+    await setMeta(db, 'seed_attempt_at', Date.now());
     return;
   }
 
