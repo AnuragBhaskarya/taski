@@ -12,6 +12,6 @@ database_id = "01c5334e-3a44-479d-aa20-eaaaf439f92c"
 binding = "TASKI_KV"
 id = "ef0358011d554c1cb1a7f5b595fdf5dd"
 
-[vars]
-SUPABASE_URL = "https://hftuxgjszjxtakigiepr.supabase.co"
-SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhmdHV4Z2pzemp4dGFraWdpZXByIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk4MzkzMzksImV4cCI6MjEwNTQxNTMzOX0.DPLfWrlTZcz0k407hS_BiM5zhUJutIzciKcCrlTbXfQ"
+# SUPABASE_URL and SUPABASE_ANON_KEY are configured as plain-text
+# environment variables on the Pages project itself. Defining them again
+# under [vars] conflicts with those existing bindings at deploy time.
